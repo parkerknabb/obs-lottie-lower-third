@@ -11,6 +11,29 @@ include(compilerconfig)
 include(defaults)
 include(helpers)
 
+
+# ThorVG: find before add_library so imported targets exist when needed
+if(APPLE)
+  find_package(PkgConfig REQUIRED)
+  pkg_check_modules(THORVG REQUIRED IMPORTED_TARGET thorvg-1)
+elseif(WIN32)
+  find_package(unofficial-thorvg CONFIG QUIET)
+  if(NOT unofficial-thorvg_FOUND)
+    find_path(THORVG_INCLUDE_DIR thorvg_capi.h)
+    find_library(THORVG_LIB NAMES thorvg-1 thorvg)
+    if(THORVG_INCLUDE_DIR AND THORVG_LIB)
+      add_library(ThorVG::ThorVG UNKNOWN IMPORTED)
+      set_target_properties(ThorVG::ThorVG PROPERTIES
+        IMPORTED_LOCATION "${THORVG_LIB}"
+        INTERFACE_INCLUDE_DIRECTORIES "${THORVG_INCLUDE_DIR}"
+      )
+    else()
+      message(FATAL_ERROR "ThorVG not found. On Windows, run: vcpkg install")
+    endif()
+  endif()
+endif()
+
+
 add_library(${CMAKE_PROJECT_NAME} MODULE)
 
 find_package(libobs REQUIRED)
@@ -35,5 +58,22 @@ if(ENABLE_QT)
 endif()
 
 target_sources(${CMAKE_PROJECT_NAME} PRIVATE src/plugin-main.c)
+
+
+target_sources(${CMAKE_PROJECT_NAME} PRIVATE src/plugin-main.c src/test-source.c deps/cJSON.c)
+
+# ThorVG: link after target exists, before set_target_properties_plugin
+if(APPLE)
+  target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE ${THORVG_INCLUDE_DIRS} deps)
+  target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE PkgConfig::THORVG)
+elseif(WIN32)
+  if(TARGET unofficial::thorvg::thorvg)
+    target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE TVG_STATIC=1)
+    target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE unofficial::thorvg::thorvg)
+  elseif(TARGET ThorVG::ThorVG)
+    target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE ThorVG::ThorVG)
+  endif()
+endif()
+
 
 set_target_properties_plugin(${CMAKE_PROJECT_NAME} PROPERTIES OUTPUT_NAME ${_name})

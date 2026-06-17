@@ -18,17 +18,25 @@ with this program. If not, see <https://www.gnu.org/licenses/>
 
 #include <obs-module.h>
 #include <plugin-support.h>
+#include <thorvg_capi.h>
+
+extern void register_test_source(void);
+extern void unregister_test_source(void);
 
 OBS_DECLARE_MODULE()
 OBS_MODULE_USE_DEFAULT_LOCALE(PLUGIN_NAME, "en-US")
 
 bool obs_module_load(void)
 {
-	obs_log(LOG_INFO, "plugin loaded successfully (version %s)", PLUGIN_VERSION);
+	obs_log(LOG_INFO, "plugin loaded successfully (version %s) 1:55pm", PLUGIN_VERSION);
+    tvg_engine_init(0);
+    register_test_source();
+    
 	return true;
 }
 
 void obs_module_unload(void)
 {
-	obs_log(LOG_INFO, "plugin unloaded");
+    tvg_engine_term();
+    obs_log(LOG_INFO, "plugin unloaded");
 }
