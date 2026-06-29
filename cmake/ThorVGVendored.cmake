@@ -1,8 +1,8 @@
 include(ExternalProject)
 
-set(THORVG_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third_party/thorvg")
-set(THORVG_BUILD_DIR "${CMAKE_CURRENT_BINARY_DIR}/third_party/thorvg-build")
-set(THORVG_INSTALL_DIR "${CMAKE_CURRENT_BINARY_DIR}/third_party/thorvg-install")
+set(THORVG_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/deps/thorvg")
+set(THORVG_BUILD_DIR "${CMAKE_CURRENT_BINARY_DIR}/deps/thorvg-build")
+set(THORVG_INSTALL_DIR "${CMAKE_CURRENT_BINARY_DIR}/deps/thorvg-install")
 
 if(NOT EXISTS "${THORVG_SOURCE_DIR}/meson.build")
   message(FATAL_ERROR "Bundled ThorVG source not found. Run: git submodule update --init --recursive")
@@ -64,7 +64,7 @@ if(APPLE)
   if(THORVG_MACOS_COMPILE_ARGS)
     thorvg_make_meson_array(THORVG_MACOS_MESON_ARGS ${THORVG_MACOS_COMPILE_ARGS})
 
-    set(THORVG_MESON_NATIVE_FILE "${CMAKE_CURRENT_BINARY_DIR}/third_party/thorvg-macos.ini")
+    set(THORVG_MESON_NATIVE_FILE "${CMAKE_CURRENT_BINARY_DIR}/deps/thorvg-macos.ini")
     file(
       WRITE
       "${THORVG_MESON_NATIVE_FILE}"
