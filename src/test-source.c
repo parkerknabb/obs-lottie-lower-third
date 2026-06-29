@@ -2,6 +2,7 @@
 #include <plugin-support.h>
 #include <thorvg_capi.h>
 #include <stdio.h>
+#include <string.h>
 #include <cJSON.h>
 
 // ─────────────────────────────────────────────────────────
@@ -194,6 +195,9 @@ struct test_source {
     float current_lottie_frame;
     bool lottie_loaded;
     bool is_looping_hold;
+    bool has_hold_end_marker;
+    float last_rendered_lottie_frame;
+    uint32_t set_frame_failure_count;
     
     // Text layer info
     char *text1_value;
@@ -272,6 +276,7 @@ static void parse_lottie_markers(struct test_source *ctx)
     ctx->hold_end_frame_lottie = -1.0f;
     ctx->outro_start_frame = -1.0f;
     ctx->pvw_time_frame = -1.0f;
+    ctx->has_hold_end_marker = false;
     
     uint32_t marker_count = 0;
     tvg_lottie_animation_get_markers_cnt(ctx->anim, &marker_count);
@@ -291,6 +296,7 @@ static void parse_lottie_markers(struct test_source *ctx)
                 ctx->hold_start_frame_lottie = begin;
             } else if (strcmp(name, "hold_end") == 0) {
                 ctx->hold_end_frame_lottie = begin;
+                ctx->has_hold_end_marker = true;
             } else if (strcmp(name, "outro") == 0) {
                 ctx->outro_start_frame = begin;
             } else if (strcmp(name, "pvw_time") == 0) {
@@ -304,14 +310,17 @@ static void parse_lottie_markers(struct test_source *ctx)
         ctx->hold_start_frame_lottie = ctx->total_frames * 0.3f;
     }
     if (ctx->hold_end_frame_lottie < 0) {
-        ctx->hold_end_frame_lottie = ctx->total_frames * 0.7f;
+        ctx->hold_end_frame_lottie = ctx->hold_start_frame_lottie;
     }
     if (ctx->outro_start_frame < 0) {
         ctx->outro_start_frame = ctx->total_frames * 0.8f;
     }
     
-    blog(LOG_INFO, "[test_source] Markers parsed - intro: %.1f, hold_start: %.1f, hold_end: %.1f, outro: %.1f",
-         ctx->intro_start_frame, ctx->hold_start_frame_lottie, ctx->hold_end_frame_lottie, ctx->outro_start_frame);
+    blog(LOG_INFO, "[test_source] Markers parsed - intro: %.1f, hold_start: %.1f, hold_end: %.1f%s, outro: %.1f",
+         ctx->intro_start_frame, ctx->hold_start_frame_lottie,
+         ctx->hold_end_frame_lottie,
+         ctx->has_hold_end_marker ? "" : " (static hold)",
+         ctx->outro_start_frame);
 }
 
 // ───────────────────────────────────
@@ -423,6 +432,56 @@ static bool patch_text_document_value(cJSON *layer, const char *new_text)
     }
 
     return patched;
+}
+
+static bool lottie_chars_has_glyph(cJSON *chars, char ch)
+{
+    if (!cJSON_IsArray(chars))
+        return true;
+
+    cJSON *glyph = NULL;
+    cJSON_ArrayForEach(glyph, chars) {
+        cJSON *glyph_ch = cJSON_GetObjectItemCaseSensitive(glyph, "ch");
+        if (cJSON_IsString(glyph_ch) &&
+            glyph_ch->valuestring[0] == ch &&
+            glyph_ch->valuestring[1] == '\0') {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+static void warn_missing_text_glyphs(cJSON *root,
+                                     const char *layer_name,
+                                     const char *text)
+{
+    cJSON *chars = root ? cJSON_GetObjectItemCaseSensitive(root, "chars") : NULL;
+    if (!cJSON_IsArray(chars) || !text)
+        return;
+
+    char missing[128] = {0};
+    size_t missing_len = 0;
+
+    for (const char *p = text; *p; p++) {
+        unsigned char ch = (unsigned char)*p;
+        if (ch > 0x7f)
+            continue;
+
+        if (!lottie_chars_has_glyph(chars, (char)ch) &&
+            !strchr(missing, ch) &&
+            missing_len + 2 < sizeof(missing)) {
+            missing[missing_len++] = (char)ch;
+            missing[missing_len] = '\0';
+        }
+    }
+
+    if (missing_len > 0) {
+        blog(LOG_WARNING,
+             "[test_source] %s patched text contains glyphs not embedded in Lottie chars: \"%s\"",
+             layer_name,
+             missing);
+    }
 }
 static void patch_lower_third_text_layer(cJSON *layer,
                                          struct test_source *ctx)
@@ -557,6 +616,9 @@ static void unload_lottie(struct test_source *ctx)
     ctx->hold_end_frame_lottie = -1.0f;
     ctx->outro_start_frame = -1.0f;
     ctx->pvw_time_frame = -1.0f;
+    ctx->has_hold_end_marker = false;
+    ctx->last_rendered_lottie_frame = 0.0f;
+    ctx->set_frame_failure_count = 0;
 }
 
 static bool load_lottie_with_current_text(struct test_source *ctx)
@@ -607,6 +669,9 @@ static bool load_lottie_with_current_text(struct test_source *ctx)
 
     if (!ctx->has_text2)
         blog(LOG_WARNING, "[test_source] #text2/text2 layer not found");
+
+    warn_missing_text_glyphs(root, "#text1", ctx->text1_value);
+    warn_missing_text_glyphs(root, "#text2", ctx->text2_value);
 
     char *patched_json = cJSON_PrintUnformatted(root);
     cJSON_Delete(root);
@@ -840,6 +905,17 @@ static double get_global_framerate(void) {
     return 30.0f;
 }
 
+static float stable_marker_render_frame(struct test_source *ctx, float frame)
+{
+    if (ctx && ctx->total_frames > 1.0f &&
+        frame >= 0.0f &&
+        frame < ctx->total_frames - 1.0f) {
+        return frame + 0.001f;
+    }
+
+    return frame;
+}
+
 static bool ensure_render_texture(struct test_source *ctx)
 {
     if (!ctx || !ctx->buffer)
@@ -938,22 +1014,26 @@ static bool render_lottie_frame_to_buffer(struct test_source *ctx, float frame)
             frame = ctx->total_frames - 1.0f;
     }
 
+    Tvg_Result result;
+
+    result = tvg_animation_set_frame(ctx->anim, frame);
+    if (result != TVG_RESULT_SUCCESS) {
+        ctx->set_frame_failure_count++;
+        blog(LOG_WARNING,
+             "[test_source] tvg_animation_set_frame failed at frame %.3f; preserving previous rendered frame %.3f",
+             frame,
+             ctx->last_rendered_lottie_frame);
+        return true;
+    }
+
+    ctx->set_frame_failure_count = 0;
+
     size_t buffer_bytes =
         (size_t)ctx->buffer_width *
         (size_t)ctx->buffer_height *
         sizeof(uint32_t);
 
     memset(ctx->buffer, 0, buffer_bytes);
-
-    Tvg_Result result;
-
-    result = tvg_animation_set_frame(ctx->anim, frame);
-    if (result != TVG_RESULT_SUCCESS) {
-        blog(LOG_WARNING,
-             "[test_source] tvg_animation_set_frame failed at frame %.2f",
-             frame);
-        return false;
-    }
 
     result = tvg_canvas_update(ctx->canvas);
     if (result != TVG_RESULT_SUCCESS) {
@@ -973,6 +1053,7 @@ static bool render_lottie_frame_to_buffer(struct test_source *ctx, float frame)
         return false;
     }
 
+    ctx->last_rendered_lottie_frame = frame;
     return true;
 }
 
@@ -1423,20 +1504,17 @@ static void test_video_tick(void *data, float seconds)
     case STATE_ENTERING:
         ctx->current_lottie_frame += frame_advance;
         ctx->current_frame++;
-            
-        // Calculate current frame based on time for better accuracy
-            ctx->current_frame++;
         
         // Check if we've reached the hold start
         if (ctx->current_lottie_frame >= ctx->hold_start_frame_lottie) {
             blog(LOG_INFO, "[test_source] tick: ENTERING -> HOLDING (frame %u)", ctx->current_frame);
             ctx->state = STATE_HOLDING;
-            ctx->is_looping_hold = true;
-            ctx->current_lottie_frame = ctx->hold_start_frame_lottie; // Reset to hold start
+            ctx->is_looping_hold =
+                ctx->has_hold_end_marker &&
+                ctx->hold_end_frame_lottie > ctx->hold_start_frame_lottie;
+            ctx->current_lottie_frame =
+                stable_marker_render_frame(ctx, ctx->hold_start_frame_lottie);
             try_attach_hide_transition(ctx);
-        } else if (ctx->current_frame > ctx->exit_start_frame) {
-            // Safety check for overshooting
-            ctx->current_lottie_frame = ctx->hold_start_frame_lottie - 0.1f;
         }
         break;
         
@@ -1445,8 +1523,12 @@ static void test_video_tick(void *data, float seconds)
             // Loop between hold_start and hold_end
             ctx->current_lottie_frame += frame_advance;
             if (ctx->current_lottie_frame > ctx->hold_end_frame_lottie) {
-                ctx->current_lottie_frame = ctx->hold_start_frame_lottie;
+                ctx->current_lottie_frame =
+                    stable_marker_render_frame(ctx, ctx->hold_start_frame_lottie);
             }
+        } else {
+            ctx->current_lottie_frame =
+                stable_marker_render_frame(ctx, ctx->hold_start_frame_lottie);
         }
         break;
         
