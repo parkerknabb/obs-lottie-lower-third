@@ -787,7 +787,10 @@ static uint32_t get_exit_duration_ms(struct test_source *ctx)
             blog(LOG_WARNING, "[test_source] get_exit_duration_ms: using 1000ms fallback");
             return 1000;
         }
-        uint32_t exit_frames = ctx->end_frame - ctx->outro_start_frame;
+        float exit_frames = (float)ctx->end_frame - ctx->outro_start_frame;
+        if (exit_frames <= 0.0f)
+            return 0;
+
         uint32_t ms = (uint32_t)((double)exit_frames * ovi.fps_den / ovi.fps_num * 1000.0);
         return ms;
 }
