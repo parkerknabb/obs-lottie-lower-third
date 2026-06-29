@@ -66,7 +66,8 @@ if(APPLE)
 
     set(THORVG_MESON_NATIVE_FILE "${CMAKE_CURRENT_BINARY_DIR}/third_party/thorvg-macos.ini")
     file(
-      WRITE "${THORVG_MESON_NATIVE_FILE}"
+      WRITE
+      "${THORVG_MESON_NATIVE_FILE}"
       "[built-in options]\n"
       "cpp_args = ${THORVG_MACOS_MESON_ARGS}\n"
       "cpp_link_args = ${THORVG_MACOS_MESON_ARGS}\n"
