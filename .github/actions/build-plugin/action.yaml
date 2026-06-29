@@ -32,11 +32,7 @@ runs:
       shell: bash
       run: |
         : Install Meson and Ninja 🧱
-        python3 -m pip install --user meson ninja
-        python3 - <<'PY' >> "$GITHUB_PATH"
-        import site
-        print(site.USER_BASE + "/bin")
-        PY
+        brew install meson ninja
 
     - name: Run macOS Build
       if: runner.os == 'macOS'
@@ -72,11 +68,8 @@ runs:
       shell: bash
       run: |
         : Install Meson and Ninja 🧱
-        python3 -m pip install --user meson ninja
-        python3 - <<'PY' >> "$GITHUB_PATH"
-        import site
-        print(site.USER_BASE + "/bin")
-        PY
+        sudo apt-get update
+        sudo apt-get install --yes meson ninja-build
 
     - name: Run Ubuntu Build
       if: runner.os == 'Linux'

@@ -25,5 +25,10 @@
 # Exclude macOS legacy resource forks
 .DS_Store
 
+# Exclude local source backups
+/src/old/
+src/* copy*.c
+src/*[?].c
+
 # Exclude CMake build number cache
 /cmake/.CMakeBuildNumber
