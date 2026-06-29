@@ -27,6 +27,17 @@ inputs:
 runs:
   using: composite
   steps:
+    - name: Install Meson and Ninja 🧱
+      if: runner.os == 'macOS'
+      shell: bash
+      run: |
+        : Install Meson and Ninja 🧱
+        python3 -m pip install --user meson ninja
+        python3 - <<'PY' >> "$GITHUB_PATH"
+        import site
+        print(site.USER_BASE + "/bin")
+        PY
+
     - name: Run macOS Build
       if: runner.os == 'macOS'
       shell: zsh --no-rcs --errexit --pipefail {0}
@@ -56,6 +67,17 @@ runs:
         brew install --quiet zsh
         echo ::endgroup::
 
+    - name: Install Meson and Ninja 🧱
+      if: runner.os == 'Linux'
+      shell: bash
+      run: |
+        : Install Meson and Ninja 🧱
+        python3 -m pip install --user meson ninja
+        python3 - <<'PY' >> "$GITHUB_PATH"
+        import site
+        print(site.USER_BASE + "/bin")
+        PY
+
     - name: Run Ubuntu Build
       if: runner.os == 'Linux'
       shell: zsh --no-rcs --errexit --pipefail {0}
@@ -72,6 +94,15 @@ runs:
         if (( ${+RUNNER_DEBUG} )) build_args+=(--debug)
 
         .github/scripts/build-ubuntu ${build_args}
+
+    - name: Install Meson and Ninja 🧱
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        # Install Meson and Ninja 🧱
+        python -m pip install --user meson ninja
+        $UserBase = python -c "import site; print(site.USER_BASE)"
+        "$UserBase\Scripts" >> $env:GITHUB_PATH
 
     - name: Run Windows Build
       if: runner.os == 'Windows'
