@@ -51,6 +51,19 @@ function Build {
     $CmakeBuildArgs = @('--build')
     $CmakeInstallArgs = @()
 
+    $PythonUserBase = python -c "import site; print(site.USER_BASE)"
+    $PythonScripts = Join-Path $PythonUserBase 'Scripts'
+    if ( Test-Path $PythonScripts ) {
+        $env:Path = "${PythonScripts};$env:Path"
+    }
+
+    $MesonCommand = Get-Command meson -ErrorAction 'Stop'
+    $NinjaCommand = Get-Command ninja -ErrorAction 'Stop'
+    $CmakeArgs += @(
+        "-DMESON_EXECUTABLE=$($MesonCommand.Source)"
+        "-DNINJA_EXECUTABLE=$($NinjaCommand.Source)"
+    )
+
     if ( $DebugPreference -eq 'Continue' ) {
         $CmakeArgs += ('--debug-output')
         $CmakeBuildArgs += ('--verbose')

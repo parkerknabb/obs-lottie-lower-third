@@ -86,23 +86,10 @@ ExternalProject_Add(
   BINARY_DIR "${THORVG_BUILD_DIR}"
   INSTALL_DIR "${THORVG_INSTALL_DIR}"
   CONFIGURE_COMMAND
-    "${MESON_EXECUTABLE}" setup
-      "${THORVG_BUILD_DIR}"
-      "${THORVG_SOURCE_DIR}"
-      ${THORVG_MESON_SETUP_ARGS}
-      --prefix "${THORVG_INSTALL_DIR}"
-      --libdir lib
-      --backend ninja
-      --buildtype "${THORVG_MESON_BUILD_TYPE}"
-      --default-library static
-      -Dengines=cpu
-      -Dloaders=lottie,png,jpg,ttf,otf
-      -Dbindings=capi
-      -Dsavers=
-      -Dtools=
-      -Dtests=false
-      -Dstatic=true
-      -Dextra=lottie_exp
+    "${MESON_EXECUTABLE}" setup "${THORVG_BUILD_DIR}" "${THORVG_SOURCE_DIR}" ${THORVG_MESON_SETUP_ARGS} --prefix
+    "${THORVG_INSTALL_DIR}" --libdir lib --backend ninja --buildtype "${THORVG_MESON_BUILD_TYPE}" --default-library
+    static -Dengines=cpu -Dloaders=lottie,png,jpg,ttf,otf -Dbindings=capi -Dsavers= -Dtools= -Dtests=false -Dstatic=true
+    -Dextra=lottie_exp
   BUILD_COMMAND "${MESON_EXECUTABLE}" compile -C "${THORVG_BUILD_DIR}"
   INSTALL_COMMAND "${MESON_EXECUTABLE}" install -C "${THORVG_BUILD_DIR}"
   BUILD_BYPRODUCTS "${THORVG_LIBRARY}"

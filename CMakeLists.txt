@@ -32,9 +32,7 @@ else()
         add_library(ThorVG::ThorVG UNKNOWN IMPORTED)
         set_target_properties(
           ThorVG::ThorVG
-          PROPERTIES
-            IMPORTED_LOCATION "${THORVG_LIB}"
-            INTERFACE_INCLUDE_DIRECTORIES "${THORVG_INCLUDE_DIR}"
+          PROPERTIES IMPORTED_LOCATION "${THORVG_LIB}" INTERFACE_INCLUDE_DIRECTORIES "${THORVG_INCLUDE_DIR}"
         )
       else()
         message(FATAL_ERROR "ThorVG not found. Enable USE_BUNDLED_THORVG or install ThorVG.")
@@ -42,7 +40,6 @@ else()
     endif()
   endif()
 endif()
-
 
 add_library(${CMAKE_PROJECT_NAME} MODULE)
 
@@ -76,6 +73,5 @@ if(USE_BUNDLED_THORVG)
   target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE Threads::Threads)
 endif()
 target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE ThorVG::ThorVG)
-
 
 set_target_properties_plugin(${CMAKE_PROJECT_NAME} PROPERTIES OUTPUT_NAME ${_name})
