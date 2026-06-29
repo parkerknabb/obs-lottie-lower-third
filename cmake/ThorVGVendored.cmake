@@ -11,11 +11,7 @@ endif()
 find_program(MESON_EXECUTABLE meson REQUIRED)
 find_program(NINJA_EXECUTABLE ninja REQUIRED)
 
-if(WIN32)
-  set(THORVG_LIBRARY "${THORVG_INSTALL_DIR}/lib/thorvg-1.lib")
-else()
-  set(THORVG_LIBRARY "${THORVG_INSTALL_DIR}/lib/libthorvg-1.a")
-endif()
+set(THORVG_LIBRARY "${THORVG_INSTALL_DIR}/lib/libthorvg-1.a")
 
 set(THORVG_MESON_BUILD_TYPE "release")
 if(CMAKE_BUILD_TYPE STREQUAL "Debug")
