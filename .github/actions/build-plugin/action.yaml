@@ -111,6 +111,9 @@ runs:
           Configuration = '${{ inputs.config }}'
         }
 
+        $UserBase = python -c "import site; print(site.USER_BASE)"
+        $env:Path = "$UserBase\Scripts;$env:Path"
+
         .github/scripts/Build-Windows.ps1 @BuildArgs
 
     - name: Create Summary 📊

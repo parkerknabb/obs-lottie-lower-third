@@ -91,6 +91,7 @@ ExternalProject_Add(
       "${THORVG_SOURCE_DIR}"
       ${THORVG_MESON_SETUP_ARGS}
       --prefix "${THORVG_INSTALL_DIR}"
+      --libdir lib
       --backend ninja
       --buildtype "${THORVG_MESON_BUILD_TYPE}"
       --default-library static
