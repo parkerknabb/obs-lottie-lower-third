@@ -26,6 +26,33 @@ if ( $PSVersionTable.PSVersion -lt '7.2.0' ) {
     exit 2
 }
 
+function Find-PythonUserTool {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string] $Name
+    )
+
+    $PythonScriptDirs = python -c "import os, site, sysconfig; paths = [sysconfig.get_path('scripts', scheme='nt_user'), os.path.join(site.USER_BASE, 'Scripts')]; print('\n'.join(dict.fromkeys(path for path in paths if path)))"
+    foreach ( $ScriptDir in $PythonScriptDirs ) {
+        if ( Test-Path $ScriptDir ) {
+            $env:Path = "${ScriptDir};$env:Path"
+            foreach ( $Extension in @('.exe', '.cmd', '.bat', '') ) {
+                $ToolPath = Join-Path $ScriptDir "${Name}${Extension}"
+                if ( Test-Path $ToolPath ) {
+                    return (Resolve-Path $ToolPath).Path
+                }
+            }
+        }
+    }
+
+    $Command = Get-Command $Name -ErrorAction 'SilentlyContinue'
+    if ( $Command -ne $null ) {
+        return $Command.Source
+    }
+
+    throw "Unable to locate '${Name}' in Python user scripts or PATH. Checked: $($PythonScriptDirs -join ', ')"
+}
+
 function Build {
     trap {
         Pop-Location -Stack BuildTemp -ErrorAction 'SilentlyContinue'
@@ -51,17 +78,11 @@ function Build {
     $CmakeBuildArgs = @('--build')
     $CmakeInstallArgs = @()
 
-    $PythonUserBase = python -c "import site; print(site.USER_BASE)"
-    $PythonScripts = Join-Path $PythonUserBase 'Scripts'
-    if ( Test-Path $PythonScripts ) {
-        $env:Path = "${PythonScripts};$env:Path"
-    }
-
-    $MesonCommand = Get-Command meson -ErrorAction 'Stop'
-    $NinjaCommand = Get-Command ninja -ErrorAction 'Stop'
+    $MesonPath = Find-PythonUserTool -Name 'meson'
+    $NinjaPath = Find-PythonUserTool -Name 'ninja'
     $CmakeArgs += @(
-        "-DMESON_EXECUTABLE=$($MesonCommand.Source)"
-        "-DNINJA_EXECUTABLE=$($NinjaCommand.Source)"
+        "-DMESON_EXECUTABLE=${MesonPath}"
+        "-DNINJA_EXECUTABLE=${NinjaPath}"
     )
 
     if ( $DebugPreference -eq 'Continue' ) {
