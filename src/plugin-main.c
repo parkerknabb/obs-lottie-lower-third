@@ -1,6 +1,6 @@
 /*
-Plugin Name
-Copyright (C) <Year> <Developer> <Email Address>
+OBS Lottie Lower Third
+Copyright (C) 2026 Parker Knabb
 
 This program is free software; you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -20,23 +20,23 @@ with this program. If not, see <https://www.gnu.org/licenses/>
 #include <plugin-support.h>
 #include <thorvg_capi.h>
 
-extern void register_test_source(void);
-extern void unregister_test_source(void);
+extern void register_lottie_lower_third_source(void);
+extern void unregister_lottie_lower_third_source(void);
 
 OBS_DECLARE_MODULE()
 OBS_MODULE_USE_DEFAULT_LOCALE(PLUGIN_NAME, "en-US")
 
 bool obs_module_load(void)
 {
-	obs_log(LOG_INFO, "plugin loaded successfully (version %s) 1:55pm", PLUGIN_VERSION);
-    tvg_engine_init(0);
-    register_test_source();
-    
+	obs_log(LOG_INFO, "OBS Lottie Lower Third loaded successfully (version %s)", PLUGIN_VERSION);
+	tvg_engine_init(0);
+	register_lottie_lower_third_source();
+
 	return true;
 }
 
 void obs_module_unload(void)
 {
-    tvg_engine_term();
-    obs_log(LOG_INFO, "plugin unloaded");
+	tvg_engine_term();
+	obs_log(LOG_INFO, "OBS Lottie Lower Third unloaded");
 }

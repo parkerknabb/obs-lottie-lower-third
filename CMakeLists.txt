@@ -64,7 +64,7 @@ if(ENABLE_QT)
   )
 endif()
 
-target_sources(${CMAKE_PROJECT_NAME} PRIVATE src/plugin-main.c src/test-source.c deps/cJSON/cJSON.c)
+target_sources(${CMAKE_PROJECT_NAME} PRIVATE src/plugin-main.c src/lottie-lower-third-source.c deps/cJSON/cJSON.c)
 target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE deps/cJSON)
 if(USE_BUNDLED_THORVG)
   target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE TVG_STATIC=1)

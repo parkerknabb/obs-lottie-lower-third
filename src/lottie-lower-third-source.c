@@ -9,74 +9,60 @@
 // Passthrough hide transition
 // ─────────────────────────────────────────────────────────
 
-struct test_source; // forward declaration
-static void test_source_tick_exit(struct test_source *ctx, uint32_t cx, uint32_t cy, gs_texture_t *a);
-static void test_source_begin_exit(struct test_source *ctx);
+struct lottie_lower_third; // forward declaration
+static void lottie_lower_third_tick_exit(struct lottie_lower_third *ctx, uint32_t cx, uint32_t cy, gs_texture_t *a);
+static void lottie_lower_third_begin_exit(struct lottie_lower_third *ctx);
 
 struct passthrough_transition {
 	obs_source_t *source;
-	struct test_source *owner;
-	uint32_t frame_count; // per-instance instead of static
+	struct lottie_lower_third *owner;
 };
 
 static const char *passthrough_get_name(void *type_data)
 {
 	UNUSED_PARAMETER(type_data);
-	return "Lower Third Passthrough";
+	return "Lottie Lower Third Hide Transition";
 }
 
 static void *passthrough_create(obs_data_t *settings, obs_source_t *source)
 {
 	UNUSED_PARAMETER(settings);
-	blog(LOG_INFO, "[passthrough] create: source=%p", (void *)source);
 	struct passthrough_transition *ctx = bzalloc(sizeof(struct passthrough_transition));
 	ctx->source = source;
 	ctx->owner = NULL;
-	ctx->frame_count = 0;
 	return ctx;
 }
 
 static void passthrough_destroy(void *data)
 {
-	blog(LOG_INFO, "[passthrough] destroy");
 	bfree(data);
 }
 
 static void passthrough_start(void *data)
 {
 	struct passthrough_transition *ctx = (struct passthrough_transition *)data;
-	blog(LOG_INFO, "[passthrough] transition_start");
 
 	// Signal the owner source to begin its exit animation
 	if (ctx->owner)
-		test_source_begin_exit(ctx->owner);
+		lottie_lower_third_begin_exit(ctx->owner);
 }
 
 static void passthrough_stop(void *data)
 {
-	struct passthrough_transition *ctx = (struct passthrough_transition *)data;
-	blog(LOG_INFO, "[passthrough] transition_stop");
-	UNUSED_PARAMETER(ctx);
+	UNUSED_PARAMETER(data);
 }
 
 static void passthrough_callback(void *data, gs_texture_t *a, gs_texture_t *b, float t, uint32_t cx, uint32_t cy)
 {
 	UNUSED_PARAMETER(b);
+	UNUSED_PARAMETER(t);
 	struct passthrough_transition *ctx = (struct passthrough_transition *)data;
 
-	ctx->frame_count++;
-	if (ctx->frame_count % 30 == 0) {
-		blog(LOG_INFO, "[passthrough] callback frame=%u t=%.3f a=%p cx=%u cy=%u", ctx->frame_count, t,
-		     (void *)a, cx, cy);
-	}
-
-	if (!a) {
-		blog(LOG_WARNING, "[passthrough] callback: texture A is NULL");
+	if (!a)
 		return;
-	}
 
 	if (ctx->owner) {
-		test_source_tick_exit(ctx->owner, cx, cy, a);
+		lottie_lower_third_tick_exit(ctx->owner, cx, cy, a);
 		return;
 	}
 
@@ -119,7 +105,7 @@ static uint32_t passthrough_get_height(void *data)
 }
 
 static struct obs_source_info passthrough_transition_info = {
-	.id = "test_passthrough_transition",
+	.id = "lottie_lower_third_passthrough_transition",
 	.type = OBS_SOURCE_TYPE_TRANSITION,
 	.output_flags = OBS_SOURCE_VIDEO,
 	.get_name = passthrough_get_name,
@@ -134,20 +120,20 @@ static struct obs_source_info passthrough_transition_info = {
 };
 
 // ─────────────────────────────────────────────────────────
-// Test lower third source
+// Lottie lower third source
 // ─────────────────────────────────────────────────────────
 
-enum test_state {
+enum lottie_lower_third_state {
 	STATE_HIDDEN,
 	STATE_ENTERING,
 	STATE_HOLDING,
 	STATE_EXITING,
 };
 
-struct test_source {
+struct lottie_lower_third {
 	obs_source_t *source;
 	obs_source_t *hide_transition;
-	enum test_state state;
+	enum lottie_lower_third_state state;
 	uint32_t current_frame;
 	uint32_t hold_start_frame;
 	uint32_t exit_start_frame;
@@ -183,6 +169,9 @@ struct test_source {
 	bool suppress_hidden_preview;
 	float last_rendered_lottie_frame;
 	uint32_t set_frame_failure_count;
+	bool warned_canvas_update_failure;
+	bool warned_canvas_draw_failure;
+	bool warned_canvas_sync_failure;
 
 	// Text layer info
 	char *text1_value;
@@ -194,7 +183,7 @@ struct test_source {
 static void scene_item_visible(void *data, calldata_t *params);
 static void global_source_create(void *data, calldata_t *params);
 
-static void detach_hide_transition_owner(struct test_source *ctx)
+static void detach_hide_transition_owner(struct lottie_lower_third *ctx)
 {
 	if (!ctx || !ctx->hide_transition)
 		return;
@@ -247,7 +236,7 @@ static bool find_item_in_scenes_cb(void *data, obs_source_t *scene_source)
 
 // ── Marker parsing ────────────────────────────────────────
 
-static void reset_lottie_markers(struct test_source *ctx)
+static void reset_lottie_markers(struct lottie_lower_third *ctx)
 {
 	ctx->intro_start_frame = 0.0f;
 	ctx->hold_start_frame_lottie = -1.0f;
@@ -257,7 +246,7 @@ static void reset_lottie_markers(struct test_source *ctx)
 	ctx->has_hold_end_marker = false;
 }
 
-static void apply_lottie_marker_defaults(struct test_source *ctx)
+static void apply_lottie_marker_defaults(struct lottie_lower_third *ctx)
 {
 	if (ctx->hold_start_frame_lottie < 0) {
 		ctx->hold_start_frame_lottie = ctx->total_frames * 0.3f;
@@ -272,13 +261,9 @@ static void apply_lottie_marker_defaults(struct test_source *ctx)
 		ctx->outro_start_frame = ctx->total_frames * 0.8f;
 	}
 
-	blog(LOG_INFO,
-	     "[test_source] Markers parsed - intro: %.1f, hold start: %.1f, hold end: %.1f%s, pvw time: %.1f, outro: %.1f",
-	     ctx->intro_start_frame, ctx->hold_start_frame_lottie, ctx->hold_end_frame_lottie,
-	     ctx->has_hold_end_marker ? "" : " (static hold)", ctx->pvw_time_frame, ctx->outro_start_frame);
 }
 
-static void set_lottie_marker(struct test_source *ctx, const char *name, float frame)
+static void set_lottie_marker(struct lottie_lower_third *ctx, const char *name, float frame)
 {
 	if (strcmp(name, "intro") == 0) {
 		ctx->intro_start_frame = frame;
@@ -294,7 +279,7 @@ static void set_lottie_marker(struct test_source *ctx, const char *name, float f
 	}
 }
 
-static bool parse_lottie_markers_from_json(cJSON *root, struct test_source *ctx)
+static bool parse_lottie_markers_from_json(cJSON *root, struct lottie_lower_third *ctx)
 {
 	cJSON *markers = root ? cJSON_GetObjectItemCaseSensitive(root, "markers") : NULL;
 	if (!cJSON_IsArray(markers))
@@ -303,7 +288,6 @@ static bool parse_lottie_markers_from_json(cJSON *root, struct test_source *ctx)
 	reset_lottie_markers(ctx);
 
 	int marker_count = cJSON_GetArraySize(markers);
-	blog(LOG_INFO, "[test_source] Found %d JSON markers", marker_count);
 
 	cJSON *marker = NULL;
 	cJSON_ArrayForEach(marker, markers)
@@ -314,14 +298,13 @@ static bool parse_lottie_markers_from_json(cJSON *root, struct test_source *ctx)
 		if (!cJSON_IsString(name) || !cJSON_IsNumber(time))
 			continue;
 
-		blog(LOG_INFO, "[test_source] JSON marker: %s frame=%.1f", name->valuestring, time->valuedouble);
 		set_lottie_marker(ctx, name->valuestring, (float)time->valuedouble);
 	}
 
 	return marker_count > 0;
 }
 
-static void parse_lottie_markers(struct test_source *ctx)
+static void parse_lottie_markers(struct lottie_lower_third *ctx)
 {
 	if (!ctx->anim)
 		return;
@@ -331,15 +314,12 @@ static void parse_lottie_markers(struct test_source *ctx)
 	uint32_t marker_count = 0;
 	tvg_lottie_animation_get_markers_cnt(ctx->anim, &marker_count);
 
-	blog(LOG_INFO, "[test_source] Found %u markers", marker_count);
-
 	for (uint32_t i = 0; i < marker_count; i++) {
 		const char *name = NULL;
 		float begin = 0, end = 0;
 		tvg_lottie_animation_get_marker_info(ctx->anim, i, &name, &begin, &end);
 
 		if (name) {
-			blog(LOG_INFO, "[test_source] Marker [%u]: %s begin=%.1f end=%.1f", i, name, begin, end);
 			set_lottie_marker(ctx, name, begin);
 		}
 	}
@@ -409,7 +389,7 @@ static bool set_bstr(char **dst, const char *src)
 
 	return true;
 }
-static void test_get_defaults(obs_data_t *settings)
+static void lottie_lower_third_get_defaults(obs_data_t *settings)
 {
 	obs_data_set_default_string(settings, "text1", "Main Text");
 	obs_data_set_default_string(settings, "text2", "Subtext");
@@ -438,14 +418,28 @@ static bool patch_text_document_value(cJSON *layer, const char *new_text)
 	cJSON *d = t ? cJSON_GetObjectItemCaseSensitive(t, "d") : NULL;
 	cJSON *k = d ? cJSON_GetObjectItemCaseSensitive(d, "k") : NULL;
 
-	if (!cJSON_IsArray(k))
+	if (!k)
 		return false;
 
 	bool patched = false;
 
+	if (cJSON_IsObject(k)) {
+		cJSON *s = cJSON_GetObjectItemCaseSensitive(k, "s");
+		cJSON *text = s ? cJSON_GetObjectItemCaseSensitive(s, "t") : NULL;
+
+		if (cJSON_IsString(text)) {
+			cJSON_SetValuestring(text, new_text ? new_text : "");
+			patched = true;
+		}
+
+		return patched;
+	}
+
+	if (!cJSON_IsArray(k))
+		return false;
+
 	cJSON *keyframe = NULL;
-	cJSON_ArrayForEach(keyframe, k)
-	{
+	cJSON_ArrayForEach(keyframe, k) {
 		cJSON *s = cJSON_GetObjectItemCaseSensitive(keyframe, "s");
 		cJSON *text = s ? cJSON_GetObjectItemCaseSensitive(s, "t") : NULL;
 
@@ -497,11 +491,12 @@ static void warn_missing_text_glyphs(cJSON *root, const char *layer_name, const 
 	}
 
 	if (missing_len > 0) {
-		blog(LOG_WARNING, "[test_source] %s patched text contains glyphs not embedded in Lottie chars: \"%s\"",
+		blog(LOG_WARNING,
+		     "[lottie_lower_third] %s patched text contains glyphs not embedded in Lottie chars: \"%s\"",
 		     layer_name, missing);
 	}
 }
-static void patch_lower_third_text_layer(cJSON *layer, struct test_source *ctx)
+static void patch_lower_third_text_layer(cJSON *layer, struct lottie_lower_third *ctx)
 {
 	if (!cJSON_IsObject(layer))
 		return;
@@ -509,18 +504,17 @@ static void patch_lower_third_text_layer(cJSON *layer, struct test_source *ctx)
 	if (layer_matches_text_id(layer, "NAME", "NAME")) {
 		if (patch_text_document_value(layer, ctx->text1_value)) {
 			ctx->has_text1 = true;
-			blog(LOG_INFO, "[test_source] Patched NAME text layer");
 		} else {
-			blog(LOG_WARNING, "[test_source] Found NAME layer but could not patch text document");
+			blog(LOG_WARNING, "[lottie_lower_third] Found NAME layer but could not patch text document");
 		}
 	}
 
 	if (layer_matches_text_id(layer, "SUBTITLE", "SUBTITLE")) {
 		if (patch_text_document_value(layer, ctx->text2_value)) {
 			ctx->has_text2 = true;
-			blog(LOG_INFO, "[test_source] Patched SUBTITLE text layer");
 		} else {
-			blog(LOG_WARNING, "[test_source] Found SUBTITLE layer but could not patch text document");
+			blog(LOG_WARNING,
+			     "[lottie_lower_third] Found SUBTITLE layer but could not patch text document");
 		}
 	}
 }
@@ -548,7 +542,7 @@ static bool is_text_layer(cJSON *layer, const char *primary_nm, const char *prim
 
 	return false;
 }
-static void patch_lottie_text_layers(cJSON *node, struct test_source *ctx)
+static void patch_lottie_text_layers(cJSON *node, struct lottie_lower_third *ctx)
 {
 	if (!node)
 		return;
@@ -567,14 +561,12 @@ static void patch_lottie_text_layers(cJSON *node, struct test_source *ctx)
 				if (is_text_layer(layer, "NAME", "NAME", "#text1", "text1")) {
 					if (patch_text_document_value(layer, ctx->text1_value)) {
 						ctx->has_text1 = true;
-						blog(LOG_INFO, "[test_source] Patched NAME");
 					}
 				}
 
 				if (is_text_layer(layer, "SUBTITLE", "SUBTITLE", "#text2", "text2")) {
 					if (patch_text_document_value(layer, ctx->text2_value)) {
 						ctx->has_text2 = true;
-						blog(LOG_INFO, "[test_source] Patched SUBTITLE");
 					}
 				}
 
@@ -599,7 +591,7 @@ static void patch_lottie_text_layers(cJSON *node, struct test_source *ctx)
 	}
 }
 
-static void unload_lottie(struct test_source *ctx)
+static void unload_lottie(struct lottie_lower_third *ctx)
 {
 	if (!ctx)
 		return;
@@ -622,13 +614,13 @@ static void unload_lottie(struct test_source *ctx)
 
 	ctx->anim = tvg_lottie_animation_new();
 	if (!ctx->anim) {
-		blog(LOG_ERROR, "[test_source] failed to create ThorVG animation");
+		blog(LOG_ERROR, "[lottie_lower_third] failed to create ThorVG animation");
 		return;
 	}
 
 	ctx->pic = tvg_animation_get_picture(ctx->anim);
 	if (!ctx->pic) {
-		blog(LOG_ERROR, "[test_source] failed to get ThorVG animation picture");
+		blog(LOG_ERROR, "[lottie_lower_third] failed to get ThorVG animation picture");
 		tvg_animation_del(ctx->anim);
 		ctx->anim = NULL;
 		return;
@@ -644,20 +636,21 @@ static void unload_lottie(struct test_source *ctx)
 	ctx->has_hold_end_marker = false;
 	ctx->last_rendered_lottie_frame = 0.0f;
 	ctx->set_frame_failure_count = 0;
+	ctx->warned_canvas_update_failure = false;
+	ctx->warned_canvas_draw_failure = false;
+	ctx->warned_canvas_sync_failure = false;
 }
 
-static bool load_lottie_with_current_text(struct test_source *ctx)
+static bool load_lottie_with_current_text(struct lottie_lower_third *ctx)
 {
 	if (!ctx || !ctx->lottie_path || !*ctx->lottie_path)
 		return false;
-
-	blog(LOG_INFO, "[test_source] Loading patched Lottie: %s", ctx->lottie_path);
 
 	size_t json_size = 0;
 	char *json = read_file_to_string(ctx->lottie_path, &json_size);
 
 	if (!json) {
-		blog(LOG_ERROR, "[test_source] Failed to read Lottie file: %s", ctx->lottie_path);
+		blog(LOG_ERROR, "[lottie_lower_third] Failed to read Lottie file: %s", ctx->lottie_path);
 		return false;
 	}
 
@@ -665,7 +658,7 @@ static bool load_lottie_with_current_text(struct test_source *ctx)
 	bfree(json);
 
 	if (!root) {
-		blog(LOG_ERROR, "[test_source] Failed to parse Lottie JSON: %s", ctx->lottie_path);
+		blog(LOG_ERROR, "[lottie_lower_third] Failed to parse Lottie JSON: %s", ctx->lottie_path);
 		return false;
 	}
 
@@ -673,7 +666,7 @@ static bool load_lottie_with_current_text(struct test_source *ctx)
 	if (cJSON_IsNumber(fr) && fr->valuedouble > 0.0) {
 		ctx->lottie_fps = (float)fr->valuedouble;
 	} else {
-		blog(LOG_WARNING, "[test_source] Lottie JSON has no valid 'fr'; using 30fps fallback");
+		blog(LOG_WARNING, "[lottie_lower_third] Lottie JSON has no valid 'fr'; using 30fps fallback");
 	}
 
 	ctx->has_text1 = false;
@@ -686,10 +679,10 @@ static bool load_lottie_with_current_text(struct test_source *ctx)
 	patch_lottie_text_layers(root, ctx);
 
 	if (!ctx->has_text1)
-		blog(LOG_WARNING, "[test_source] NAME text layer not found");
+		blog(LOG_WARNING, "[lottie_lower_third] NAME text layer not found");
 
 	if (!ctx->has_text2)
-		blog(LOG_WARNING, "[test_source] SUBTITLE text layer not found");
+		blog(LOG_WARNING, "[lottie_lower_third] SUBTITLE text layer not found");
 
 	warn_missing_text_glyphs(root, "NAME", ctx->text1_value);
 	warn_missing_text_glyphs(root, "SUBTITLE", ctx->text2_value);
@@ -698,7 +691,7 @@ static bool load_lottie_with_current_text(struct test_source *ctx)
 
 	if (!patched_json) {
 		cJSON_Delete(root);
-		blog(LOG_ERROR, "[test_source] Failed to serialize patched Lottie JSON");
+		blog(LOG_ERROR, "[lottie_lower_third] Failed to serialize patched Lottie JSON");
 		return false;
 	}
 
@@ -728,14 +721,14 @@ static bool load_lottie_with_current_text(struct test_source *ctx)
 	cJSON_free(patched_json);
 
 	if (result != TVG_RESULT_SUCCESS) {
-		blog(LOG_ERROR, "[test_source] tvg_picture_load_data failed");
+		blog(LOG_ERROR, "[lottie_lower_third] tvg_picture_load_data failed");
 		return false;
 	}
 
 	tvg_picture_get_size(ctx->pic, &ctx->lottie_width, &ctx->lottie_height);
 
 	if (ctx->lottie_width <= 0.0f || ctx->lottie_height <= 0.0f) {
-		blog(LOG_WARNING, "[test_source] Lottie reported invalid size %.2fx%.2f; using buffer size",
+		blog(LOG_WARNING, "[lottie_lower_third] Lottie reported invalid size %.2fx%.2f; using buffer size",
 		     ctx->lottie_width, ctx->lottie_height);
 
 		ctx->lottie_width = (float)ctx->buffer_width;
@@ -750,17 +743,13 @@ static bool load_lottie_with_current_text(struct test_source *ctx)
 	tvg_animation_get_total_frame(ctx->anim, &ctx->total_frames);
 
 	if (ctx->total_frames <= 1.0f) {
-		blog(LOG_ERROR, "[test_source] Lottie has invalid total frame count: %.2f", ctx->total_frames);
+		blog(LOG_ERROR, "[lottie_lower_third] Lottie has invalid total frame count: %.2f", ctx->total_frames);
 		unload_lottie(ctx);
 		return false;
 	}
 
 	ctx->exit_start_frame = (uint32_t)(ctx->total_frames * 0.75f);
 	ctx->end_frame = (uint32_t)ctx->total_frames;
-
-	blog(LOG_INFO, "[test_source] Lottie natural size: %.0fx%.0f", ctx->lottie_width, ctx->lottie_height);
-
-	blog(LOG_INFO, "[test_source] Lottie total frames: %.1f", ctx->total_frames);
 
 	tvg_picture_set_size(ctx->pic, ctx->lottie_width, ctx->lottie_height);
 	tvg_canvas_add(ctx->canvas, ctx->pic);
@@ -775,13 +764,11 @@ static bool load_lottie_with_current_text(struct test_source *ctx)
 
 	ctx->current_lottie_frame = ctx->intro_start_frame;
 
-	blog(LOG_INFO, "[test_source] Patched Lottie loaded. text1=%d text2=%d", ctx->has_text1, ctx->has_text2);
-
 	return true;
 }
 // ── Transition attachment ─────────────────────────────────
 
-static uint32_t get_exit_duration_ms(struct test_source *ctx)
+static uint32_t get_exit_duration_ms(struct lottie_lower_third *ctx)
 {
 	// If we have Lottie loaded, calculate based on actual outro duration
 	if (ctx->lottie_loaded && ctx->total_frames > 0) {
@@ -791,15 +778,13 @@ static uint32_t get_exit_duration_ms(struct test_source *ctx)
 			// Assume 30fps for Lottie (common default)
 			float lottie_fps = 30.0f;
 			uint32_t duration_ms = (uint32_t)((outro_frames / lottie_fps) * 1000.0f);
-			blog(LOG_INFO, "[test_source] Calculated outro duration: %u ms (%.1f frames)", duration_ms,
-			     outro_frames);
 			return duration_ms;
 		}
 	}
 	// Fallback to fixed duration
 	struct obs_video_info ovi;
 	if (!obs_get_video_info(&ovi) || ovi.fps_den == 0) {
-		blog(LOG_WARNING, "[test_source] get_exit_duration_ms: using 1000ms fallback");
+		blog(LOG_WARNING, "[lottie_lower_third] get_exit_duration_ms: using 1000ms fallback");
 		return 1000;
 	}
 	float exit_frames = (float)ctx->end_frame - ctx->outro_start_frame;
@@ -810,7 +795,7 @@ static uint32_t get_exit_duration_ms(struct test_source *ctx)
 	return ms;
 }
 
-static void attach_hide_transition(struct test_source *ctx, obs_sceneitem_t *item)
+static void attach_hide_transition(struct lottie_lower_third *ctx, obs_sceneitem_t *item)
 {
 	if (ctx->hide_transition) {
 		detach_hide_transition_owner(ctx);
@@ -818,11 +803,11 @@ static void attach_hide_transition(struct test_source *ctx, obs_sceneitem_t *ite
 		ctx->hide_transition = NULL;
 	}
 
-	ctx->hide_transition =
-		obs_source_create_private("test_passthrough_transition", "lower_third_hide_transition", NULL);
+	ctx->hide_transition = obs_source_create_private("lottie_lower_third_passthrough_transition",
+							 "lower_third_hide_transition", NULL);
 
 	if (!ctx->hide_transition) {
-		blog(LOG_ERROR, "[test_source] attach: create_private FAILED");
+		blog(LOG_ERROR, "[lottie_lower_third] attach: create_private FAILED");
 		return;
 	}
 
@@ -832,9 +817,8 @@ static void attach_hide_transition(struct test_source *ctx, obs_sceneitem_t *ite
 	struct passthrough_transition *td = (struct passthrough_transition *)obs_obj_get_data(ctx->hide_transition);
 	if (td) {
 		td->owner = ctx;
-		blog(LOG_INFO, "[test_source] attach: owner back-pointer set");
 	} else {
-		blog(LOG_ERROR, "[test_source] attach: could not get transition instance data");
+		blog(LOG_ERROR, "[lottie_lower_third] attach: could not get transition instance data");
 	}
 
 	uint32_t duration_ms = get_exit_duration_ms(ctx);
@@ -843,15 +827,11 @@ static void attach_hide_transition(struct test_source *ctx, obs_sceneitem_t *ite
 	obs_sceneitem_set_transition_duration(item, false, duration_ms);
 
 	obs_source_t *check = obs_sceneitem_get_transition(item, false);
-	uint32_t check_dur = obs_sceneitem_get_transition_duration(item, false);
-	blog(LOG_INFO, "[test_source] attach: set=%p dur=%ums | readback=%p dur=%ums", (void *)ctx->hide_transition,
-	     duration_ms, (void *)check, check_dur);
-
 	if (check != ctx->hide_transition)
-		blog(LOG_ERROR, "[test_source] attach: READBACK MISMATCH");
+		blog(LOG_ERROR, "[lottie_lower_third] attach: READBACK MISMATCH");
 }
 
-static void try_attach_hide_transition(struct test_source *ctx)
+static void try_attach_hide_transition(struct lottie_lower_third *ctx)
 {
 	struct find_item_in_scenes_data fd = {
 		.target = ctx->source,
@@ -860,32 +840,15 @@ static void try_attach_hide_transition(struct test_source *ctx)
 	obs_enum_scenes(find_item_in_scenes_cb, &fd);
 
 	if (fd.result) {
-		blog(LOG_INFO, "[test_source] tick: found item %p, pre-attaching hide transition", (void *)fd.result);
 		attach_hide_transition(ctx, fd.result);
-	} else {
-		blog(LOG_WARNING, "[test_source] tick: source not found in any scene");
 	}
 }
 
 // ── Exit animation ────────────────────────────────────────
 
-// Called by the transition's transition_start callback
-static void test_source_begin_exit_old(struct test_source *ctx)
+static void lottie_lower_third_begin_exit(struct lottie_lower_third *ctx)
 {
 	if (ctx->state == STATE_HOLDING || ctx->state == STATE_ENTERING) {
-		blog(LOG_INFO, "[test_source] begin_exit: entering EXITING state");
-		ctx->state = STATE_EXITING;
-		ctx->current_frame = ctx->exit_start_frame;
-		// Start outro animation
-		ctx->current_lottie_frame = ctx->outro_start_frame;
-	}
-}
-static void test_source_begin_exit(struct test_source *ctx)
-{
-	if (ctx->state == STATE_HOLDING || ctx->state == STATE_ENTERING) {
-		blog(LOG_INFO, "[test_source] begin_exit: EXITING from current Lottie frame %.2f",
-		     ctx->current_lottie_frame);
-
 		ctx->state = STATE_EXITING;
 		ctx->suppress_hidden_preview = true;
 
@@ -915,7 +878,7 @@ static double get_global_framerate(void)
 	return 30.0f;
 }
 
-static float stable_marker_render_frame(struct test_source *ctx, float frame)
+static float stable_marker_render_frame(struct lottie_lower_third *ctx, float frame)
 {
 	if (ctx && ctx->total_frames > 1.0f && frame >= 0.0f && frame < ctx->total_frames - 1.0f) {
 		return frame + 0.001f;
@@ -924,7 +887,7 @@ static float stable_marker_render_frame(struct test_source *ctx, float frame)
 	return frame;
 }
 
-static bool ensure_render_texture(struct test_source *ctx)
+static bool ensure_render_texture(struct lottie_lower_third *ctx)
 {
 	if (!ctx || !ctx->buffer)
 		return false;
@@ -951,7 +914,7 @@ static bool ensure_render_texture(struct test_source *ctx)
 	ctx->texture = gs_texture_create(w, h, GS_BGRA, 1, planes, GS_DYNAMIC);
 
 	if (!ctx->texture) {
-		blog(LOG_ERROR, "[test_source] failed to create render texture %ux%u", w, h);
+		blog(LOG_ERROR, "[lottie_lower_third] failed to create render texture %ux%u", w, h);
 		return false;
 	}
 
@@ -961,7 +924,7 @@ static bool ensure_render_texture(struct test_source *ctx)
 	return true;
 }
 
-static bool render_buffer_to_obs(struct test_source *ctx, uint32_t draw_width, uint32_t draw_height)
+static bool render_buffer_to_obs(struct lottie_lower_third *ctx, uint32_t draw_width, uint32_t draw_height)
 {
 	if (!ctx || !ctx->buffer)
 		return false;
@@ -992,7 +955,7 @@ static bool render_buffer_to_obs(struct test_source *ctx, uint32_t draw_width, u
 	return true;
 }
 
-static bool render_lottie_frame_to_buffer(struct test_source *ctx, float frame)
+static bool render_lottie_frame_to_buffer(struct lottie_lower_third *ctx, float frame)
 {
 	if (!ctx || !ctx->lottie_loaded || !ctx->anim || !ctx->canvas || !ctx->buffer)
 		return false;
@@ -1012,9 +975,11 @@ static bool render_lottie_frame_to_buffer(struct test_source *ctx, float frame)
 		ctx->set_frame_failure_count = 0;
 	} else if (result != TVG_RESULT_SUCCESS) {
 		ctx->set_frame_failure_count++;
-		blog(LOG_WARNING,
-		     "[test_source] tvg_animation_set_frame failed at frame %.3f; preserving previous rendered frame %.3f",
-		     frame, ctx->last_rendered_lottie_frame);
+		if (ctx->set_frame_failure_count == 1) {
+			blog(LOG_WARNING,
+			     "[lottie_lower_third] tvg_animation_set_frame failed at frame %.3f; preserving previous rendered frame %.3f",
+			     frame, ctx->last_rendered_lottie_frame);
+		}
 		return true;
 	} else {
 		ctx->set_frame_failure_count = 0;
@@ -1026,27 +991,39 @@ static bool render_lottie_frame_to_buffer(struct test_source *ctx, float frame)
 
 	result = tvg_canvas_update(ctx->canvas);
 	if (result != TVG_RESULT_SUCCESS) {
-		blog(LOG_WARNING, "[test_source] tvg_canvas_update failed");
+		if (!ctx->warned_canvas_update_failure) {
+			blog(LOG_WARNING, "[lottie_lower_third] tvg_canvas_update failed");
+			ctx->warned_canvas_update_failure = true;
+		}
 		return false;
 	}
+	ctx->warned_canvas_update_failure = false;
 
 	result = tvg_canvas_draw(ctx->canvas, true);
 	if (result != TVG_RESULT_SUCCESS) {
-		blog(LOG_WARNING, "[test_source] tvg_canvas_draw failed");
+		if (!ctx->warned_canvas_draw_failure) {
+			blog(LOG_WARNING, "[lottie_lower_third] tvg_canvas_draw failed");
+			ctx->warned_canvas_draw_failure = true;
+		}
 		return false;
 	}
+	ctx->warned_canvas_draw_failure = false;
 
 	result = tvg_canvas_sync(ctx->canvas);
 	if (result != TVG_RESULT_SUCCESS) {
-		blog(LOG_WARNING, "[test_source] tvg_canvas_sync failed");
+		if (!ctx->warned_canvas_sync_failure) {
+			blog(LOG_WARNING, "[lottie_lower_third] tvg_canvas_sync failed");
+			ctx->warned_canvas_sync_failure = true;
+		}
 		return false;
 	}
+	ctx->warned_canvas_sync_failure = false;
 
 	ctx->last_rendered_lottie_frame = frame;
 	return true;
 }
 
-static bool render_lottie_to_buffer(struct test_source *ctx)
+static bool render_lottie_to_buffer(struct lottie_lower_third *ctx)
 {
 	if (!ctx)
 		return false;
@@ -1054,7 +1031,7 @@ static bool render_lottie_to_buffer(struct test_source *ctx)
 	return render_lottie_frame_to_buffer(ctx, ctx->current_lottie_frame);
 }
 
-static float get_lottie_preview_frame(struct test_source *ctx)
+static float get_lottie_preview_frame(struct lottie_lower_third *ctx)
 {
 	if (!ctx || ctx->total_frames <= 1.0f)
 		return 0.0f;
@@ -1087,7 +1064,7 @@ static float get_lottie_preview_frame(struct test_source *ctx)
 	return ctx->total_frames * 0.3f;
 }
 
-static obs_properties_t *test_get_properties(void *data)
+static obs_properties_t *lottie_lower_third_get_properties(void *data)
 {
 	UNUSED_PARAMETER(data);
 	obs_properties_t *props = obs_properties_create();
@@ -1102,7 +1079,7 @@ static obs_properties_t *test_get_properties(void *data)
 
 // ── Scene signal handling ─────────────────────────────────
 
-static void connect_scene_signals(struct test_source *ctx, obs_source_t *scene_source)
+static void connect_scene_signals(struct lottie_lower_third *ctx, obs_source_t *scene_source)
 {
 	if (!obs_scene_from_source(scene_source) && !obs_group_from_source(scene_source))
 		return;
@@ -1110,7 +1087,7 @@ static void connect_scene_signals(struct test_source *ctx, obs_source_t *scene_s
 	signal_handler_connect(handler, "item_visible", scene_item_visible, ctx);
 }
 
-static void disconnect_scene_signals(struct test_source *ctx, obs_source_t *scene_source)
+static void disconnect_scene_signals(struct lottie_lower_third *ctx, obs_source_t *scene_source)
 {
 	if (!obs_scene_from_source(scene_source) && !obs_group_from_source(scene_source))
 		return;
@@ -1120,34 +1097,32 @@ static void disconnect_scene_signals(struct test_source *ctx, obs_source_t *scen
 
 static bool connect_scene_enum(void *data, obs_source_t *scene_source)
 {
-	connect_scene_signals((struct test_source *)data, scene_source);
+	connect_scene_signals((struct lottie_lower_third *)data, scene_source);
 	return true;
 }
 
 static bool disconnect_scene_enum(void *data, obs_source_t *scene_source)
 {
-	disconnect_scene_signals((struct test_source *)data, scene_source);
+	disconnect_scene_signals((struct lottie_lower_third *)data, scene_source);
 	return true;
 }
 
-static const char *test_get_name(void *type_data)
+static const char *lottie_lower_third_get_name(void *type_data)
 {
 	UNUSED_PARAMETER(type_data);
-	return "Test Lower Third";
+	return "Lottie Lower Third";
 }
 
 static void global_source_create(void *data, calldata_t *params)
 {
-	struct test_source *ctx = (struct test_source *)data;
+	struct lottie_lower_third *ctx = (struct lottie_lower_third *)data;
 	obs_source_t *source = calldata_ptr(params, "source");
 	if (source)
 		connect_scene_signals(ctx, source);
 }
-static void test_show(void *data)
+static void lottie_lower_third_show(void *data)
 {
-	struct test_source *ctx = (struct test_source *)data;
-
-	blog(LOG_INFO, "[test_source] show");
+	struct lottie_lower_third *ctx = (struct lottie_lower_third *)data;
 
 	ctx->state = STATE_ENTERING;
 	ctx->suppress_hidden_preview = false;
@@ -1155,86 +1130,29 @@ static void test_show(void *data)
 	ctx->is_looping_hold = false;
 
 	if (!ctx->lottie_path) {
-		blog(LOG_WARNING, "[test_source] No Lottie path configured");
 		return;
 	}
 
 	if (!ctx->lottie_loaded) {
 		if (!load_lottie_with_current_text(ctx)) {
-			blog(LOG_ERROR, "[test_source] Failed to load patched Lottie");
+			blog(LOG_ERROR, "[lottie_lower_third] Failed to load patched Lottie");
 			return;
 		}
 	}
 
 	ctx->current_lottie_frame = ctx->intro_start_frame;
 	ctx->state = STATE_ENTERING;
-
-	blog(LOG_INFO, "[test_source] Starting at intro frame: %.1f", ctx->intro_start_frame);
 }
-static void test_show_old(void *data)
+static void lottie_lower_third_hide(void *data)
 {
-	struct test_source *ctx = (struct test_source *)data;
-	blog(LOG_INFO, "[test_source] show");
-	ctx->state = STATE_ENTERING;
-	ctx->current_frame = 0;
-	ctx->is_looping_hold = false;
-
-	// Load Lottie if not already loaded
-	if (!ctx->lottie_path) {
-		blog(LOG_WARNING, "[test_source] No Lottie path configured");
-		return;
-	}
-
-	if (!ctx->lottie_loaded && ctx->lottie_path) {
-		blog(LOG_INFO, "[test_source] Loading Lottie: %s", ctx->lottie_path);
-		if (tvg_picture_load(ctx->pic, ctx->lottie_path) == TVG_RESULT_SUCCESS) {
-			// Get natural Lottie dimensions before setting size
-			tvg_picture_get_size(ctx->pic, &ctx->lottie_width, &ctx->lottie_height);
-
-			// Get total frames for proper timing
-			tvg_animation_get_total_frame(ctx->anim, &ctx->total_frames);
-			blog(LOG_INFO, "[test_source] Lottie total frames: %.1f", ctx->total_frames);
-
-			// Set exit frames based on actual animation
-			ctx->exit_start_frame = (uint32_t)(ctx->total_frames * 0.75f); // 75% as exit start
-			ctx->end_frame = (uint32_t)ctx->total_frames;                  // End at last frame
-
-			blog(LOG_INFO, "[test_source] Lottie natural size: %.0fx%.0f", ctx->lottie_width,
-			     ctx->lottie_height);
-			// Set picture size to natural dimensions
-			tvg_picture_set_size(ctx->pic, ctx->lottie_width, ctx->lottie_height);
-			tvg_canvas_add(ctx->canvas, ctx->pic);
-			ctx->lottie_loaded = true;
-
-			// Get total frames and parse markers
-			tvg_animation_get_total_frame(ctx->anim, &ctx->total_frames);
-			blog(LOG_INFO, "[test_source] Lottie loaded, total frames: %.1f", ctx->total_frames);
-			parse_lottie_markers(ctx);
-
-			// Start at intro marker
-			ctx->current_lottie_frame = ctx->intro_start_frame;
-		} else {
-			blog(LOG_ERROR, "[test_source] Failed to load Lottie file: %s", ctx->lottie_path);
-		}
-	} else if (ctx->lottie_loaded) {
-		// Reset to intro start
-		ctx->current_lottie_frame = ctx->intro_start_frame;
-		blog(LOG_INFO, "[test_source] Resetting to intro frame: %.1f", ctx->intro_start_frame);
-		ctx->state = STATE_ENTERING;
-	}
-}
-
-static void test_hide(void *data)
-{
-	struct test_source *ctx = (struct test_source *)data;
-	blog(LOG_INFO, "[test_source] hide: state=%d", ctx->state);
+	struct lottie_lower_third *ctx = (struct lottie_lower_third *)data;
 	ctx->suppress_hidden_preview = true;
 	// The exit animation is handled by the transition callback
 }
 
 static void scene_item_visible(void *data, calldata_t *params)
 {
-	struct test_source *ctx = (struct test_source *)data;
+	struct lottie_lower_third *ctx = (struct lottie_lower_third *)data;
 	obs_sceneitem_t *item = calldata_ptr(params, "item");
 	bool visible = calldata_bool(params, "visible");
 
@@ -1246,22 +1164,18 @@ static void scene_item_visible(void *data, calldata_t *params)
 		obs_sceneitem_set_transition_duration(item, false, get_exit_duration_ms(ctx));
 	}
 
-	blog(LOG_INFO, "[test_source] scene_item_visible: visible=%d", visible);
-
 	if (visible) {
-		test_show(ctx);
+		lottie_lower_third_show(ctx);
 	} else {
-		test_hide(ctx);
+		lottie_lower_third_hide(ctx);
 	}
 }
 
 // ── Source lifecycle ──────────────────────────────────────
 
-static void *test_create(obs_data_t *settings, obs_source_t *source)
+static void *lottie_lower_third_create(obs_data_t *settings, obs_source_t *source)
 {
-	blog(LOG_INFO, "[test_source] create: source=%p", (void *)source);
-
-	struct test_source *ctx = bzalloc(sizeof(struct test_source));
+	struct lottie_lower_third *ctx = bzalloc(sizeof(struct lottie_lower_third));
 	ctx->source = source;
 	ctx->state = STATE_HIDDEN;
 	ctx->suppress_hidden_preview = false;
@@ -1274,14 +1188,14 @@ static void *test_create(obs_data_t *settings, obs_source_t *source)
 	tvg_swcanvas_set_target(ctx->canvas, ctx->buffer, ctx->buffer_width, ctx->buffer_width, ctx->buffer_height,
 				TVG_COLORSPACE_ARGB8888);
 	if (!ctx->canvas) {
-		blog(LOG_ERROR, "[test_source] failed to create ThorVG canvas");
+		blog(LOG_ERROR, "[lottie_lower_third] failed to create ThorVG canvas");
 		bfree(ctx->buffer);
 		bfree(ctx);
 		return NULL;
 	}
 	ctx->anim = tvg_lottie_animation_new();
 	if (!ctx->anim) {
-		blog(LOG_ERROR, "[test_source] failed to create ThorVG animation");
+		blog(LOG_ERROR, "[lottie_lower_third] failed to create ThorVG animation");
 		tvg_canvas_destroy(ctx->canvas);
 		bfree(ctx->buffer);
 		bfree(ctx);
@@ -1289,7 +1203,7 @@ static void *test_create(obs_data_t *settings, obs_source_t *source)
 	}
 	ctx->pic = tvg_animation_get_picture(ctx->anim);
 	if (!ctx->pic) {
-		blog(LOG_ERROR, "[test_source] failed to get ThorVG animation picture");
+		blog(LOG_ERROR, "[lottie_lower_third] failed to get ThorVG animation picture");
 		tvg_animation_del(ctx->anim);
 		tvg_canvas_destroy(ctx->canvas);
 		bfree(ctx->buffer);
@@ -1311,10 +1225,8 @@ static void *test_create(obs_data_t *settings, obs_source_t *source)
 	const char *lottie_path = obs_data_get_string(settings, "lottie_path");
 	if (lottie_path && strlen(lottie_path) > 0) {
 		ctx->lottie_path = bstrdup(lottie_path);
-		blog(LOG_INFO, "[test_source] Lottie path set to: %s", ctx->lottie_path);
 	} else {
 		ctx->lottie_path = NULL; // Explicitly set to NULL
-		blog(LOG_INFO, "[test_source] No Lottie path configured in settings");
 	}
 
 	const char *text1 = obs_data_get_string(settings, "text1");
@@ -1323,7 +1235,7 @@ static void *test_create(obs_data_t *settings, obs_source_t *source)
 	ctx->text2_value = bstrdup(text2 && *text2 ? text2 : "Title");
 
 	// Load immediately if path is provided
-	//test_show(ctx);
+	//lottie_lower_third_show(ctx);
 	ctx->state = STATE_HIDDEN;
 
 	obs_enum_scenes(connect_scene_enum, ctx);
@@ -1331,14 +1243,14 @@ static void *test_create(obs_data_t *settings, obs_source_t *source)
 	if (ctx->lottie_path && *ctx->lottie_path) {
 		if (!load_lottie_with_current_text(ctx)) {
 			blog(LOG_WARNING,
-			     "[test_source] create: Lottie was configured but could not be loaded for preview");
+			     "[lottie_lower_third] create: Lottie was configured but could not be loaded for preview");
 		}
 	}
 	return ctx;
 }
-static void test_update(void *data, obs_data_t *settings)
+static void lottie_lower_third_update(void *data, obs_data_t *settings)
 {
-	struct test_source *ctx = (struct test_source *)data;
+	struct lottie_lower_third *ctx = (struct lottie_lower_third *)data;
 
 	bool changed = false;
 
@@ -1364,7 +1276,7 @@ static void test_update(void *data, obs_data_t *settings)
 
 	if ((changed || !ctx->lottie_loaded) && ctx->lottie_path) {
 		float old_frame = ctx->current_lottie_frame;
-		enum test_state old_state = ctx->state;
+		enum lottie_lower_third_state old_state = ctx->state;
 
 		if (load_lottie_with_current_text(ctx)) {
 			/*
@@ -1380,47 +1292,7 @@ static void test_update(void *data, obs_data_t *settings)
 		}
 	}
 }
-static void test_update_old(void *data, obs_data_t *settings)
-{
-	struct test_source *ctx = (struct test_source *)data;
-
-	// Free existing path if allocated
-	if (ctx->lottie_path) {
-		bfree(ctx->lottie_path);
-		ctx->lottie_path = NULL;
-	}
-
-	// Get new path
-	const char *lottie_path = obs_data_get_string(settings, "lottie_path");
-	if (lottie_path && strlen(lottie_path) > 0) {
-		ctx->lottie_path = bstrdup(lottie_path);
-		blog(LOG_INFO, "[test_source] Lottie path updated to: %s", ctx->lottie_path);
-
-		// Try to load the Lottie file
-		if (!ctx->lottie_loaded && ctx->lottie_path) {
-			blog(LOG_INFO, "[test_source] Loading Lottie: %s", ctx->lottie_path);
-			if (tvg_picture_load(ctx->pic, ctx->lottie_path) == TVG_RESULT_SUCCESS) {
-				// Get natural Lottie dimensions
-				tvg_picture_get_size(ctx->pic, &ctx->lottie_width, &ctx->lottie_height);
-
-				// Get total frames for proper timing
-				tvg_animation_get_total_frame(ctx->anim, &ctx->total_frames);
-				blog(LOG_INFO, "[test_source] Lottie loaded, total frames: %.1f", ctx->total_frames);
-
-				tvg_canvas_add(ctx->canvas, ctx->pic);
-				ctx->lottie_loaded = true;
-				parse_lottie_markers(ctx);
-
-				// Start at intro marker
-				ctx->current_lottie_frame = ctx->intro_start_frame;
-			} else {
-				blog(LOG_ERROR, "[test_source] Failed to load Lottie file: %s", ctx->lottie_path);
-			}
-		}
-	}
-}
-
-static void destroy_render_texture(struct test_source *ctx)
+static void destroy_render_texture(struct lottie_lower_third *ctx)
 {
 	if (!ctx || !ctx->texture)
 		return;
@@ -1439,10 +1311,9 @@ static void destroy_render_texture(struct test_source *ctx)
 	ctx->texture_height = 0;
 }
 
-static void test_destroy(void *data)
+static void lottie_lower_third_destroy(void *data)
 {
-	struct test_source *ctx = (struct test_source *)data;
-	blog(LOG_INFO, "[test_source] destroy");
+	struct lottie_lower_third *ctx = (struct lottie_lower_third *)data;
 
 	signal_handler_disconnect(obs_get_signal_handler(), "source_create", global_source_create, ctx);
 	obs_enum_scenes(disconnect_scene_enum, ctx);
@@ -1468,10 +1339,10 @@ static void test_destroy(void *data)
 	bfree(data);
 }
 
-static void test_video_tick(void *data, float seconds)
+static void lottie_lower_third_video_tick(void *data, float seconds)
 {
 	UNUSED_PARAMETER(seconds);
-	struct test_source *ctx = (struct test_source *)data;
+	struct lottie_lower_third *ctx = (struct lottie_lower_third *)data;
 
 	if (!ctx->lottie_loaded)
 		return;
@@ -1486,7 +1357,6 @@ static void test_video_tick(void *data, float seconds)
 
 		// Check if we've reached the hold start
 		if (ctx->current_lottie_frame >= ctx->hold_start_frame_lottie) {
-			blog(LOG_INFO, "[test_source] tick: ENTERING -> HOLDING (frame %u)", ctx->current_frame);
 			ctx->state = STATE_HOLDING;
 			ctx->is_looping_hold = ctx->has_hold_end_marker &&
 					       ctx->hold_end_frame_lottie > ctx->hold_start_frame_lottie;
@@ -1515,37 +1385,21 @@ static void test_video_tick(void *data, float seconds)
 	case STATE_HIDDEN:
 		break;
 	}
-
-	if (ctx->current_frame % 30 == 0) {
-		blog(LOG_INFO, "[test_source] State: %d, Lottie frame: %.2f", ctx->state, ctx->current_lottie_frame);
-	}
 }
 
-static void test_render(void *data, gs_effect_t *effect)
+static void lottie_lower_third_render(void *data, gs_effect_t *effect)
 {
 	UNUSED_PARAMETER(effect);
 
-	struct test_source *ctx = (struct test_source *)data;
+	struct lottie_lower_third *ctx = (struct lottie_lower_third *)data;
 	if (!ctx)
 		return;
 
 	/*
      * Do not try to load from inside render. Loading/parsing Lottie JSON is too
-     * expensive and can block the render path. test_create/test_update should
+     * expensive and can block the render path. lottie_lower_third_create/lottie_lower_third_update should
      * handle loading.
      */
-	if (!ctx->lottie_loaded)
-		return;
-
-	static uint32_t render_log_counter = 0;
-	render_log_counter++;
-
-	if (render_log_counter % 60 == 0) {
-		blog(LOG_INFO, "[test_source] render: state=%d loaded=%d current=%.2f preview=%.2f total=%.2f path=%s",
-		     ctx->state, ctx->lottie_loaded, ctx->current_lottie_frame, get_lottie_preview_frame(ctx),
-		     ctx->total_frames, ctx->lottie_path ? ctx->lottie_path : "(null)");
-	}
-
 	if (!ctx->lottie_loaded)
 		return;
 
@@ -1571,7 +1425,7 @@ static void test_render(void *data, gs_effect_t *effect)
 }
 
 // Called from passthrough_callback each frame during the hide transition
-static void test_source_tick_exit(struct test_source *ctx, uint32_t cx, uint32_t cy, gs_texture_t *a)
+static void lottie_lower_third_tick_exit(struct lottie_lower_third *ctx, uint32_t cx, uint32_t cy, gs_texture_t *a)
 {
 	if (ctx->state == STATE_EXITING) {
 		if (ctx->lottie_loaded) {
@@ -1592,24 +1446,16 @@ static void test_source_tick_exit(struct test_source *ctx, uint32_t cx, uint32_t
 			if (next_frame >= ctx->total_frames - 1.0f) {
 				ctx->current_lottie_frame = ctx->total_frames - 1.0f;
 				ctx->state = STATE_HIDDEN;
-
-				blog(LOG_INFO, "[test_source] tick_exit: animation complete at frame %.2f",
-				     ctx->current_lottie_frame);
 			} else {
 				ctx->current_lottie_frame = next_frame;
 			}
 		}
 
 		ctx->current_frame++;
-
-		if (ctx->current_frame % 10 == 0) {
-			blog(LOG_INFO, "[test_source] tick_exit: transition_frame=%u lottie=%.2f/%.1f",
-			     ctx->current_frame, ctx->current_lottie_frame, ctx->total_frames);
-		}
 	}
 
 	/*
-	 * OBS has already rendered this source into texture A using test_render().
+	 * OBS has already rendered this source into texture A using lottie_lower_third_render().
 	 * Draw that captured source texture instead of rendering a second copy here;
 	 * double-rendering during the item transition can brighten translucent pixels.
 	 */
@@ -1630,43 +1476,42 @@ static void test_source_tick_exit(struct test_source *ctx, uint32_t cx, uint32_t
 		gs_draw_sprite(a, 0, cx, cy);
 }
 
-static uint32_t test_get_width(void *data)
+static uint32_t lottie_lower_third_get_width(void *data)
 {
-	struct test_source *ctx = (struct test_source *)data;
+	struct lottie_lower_third *ctx = (struct lottie_lower_third *)data;
 	return (uint32_t)ctx->lottie_width;
 }
 
-static uint32_t test_get_height(void *data)
+static uint32_t lottie_lower_third_get_height(void *data)
 {
-	struct test_source *ctx = (struct test_source *)data;
+	struct lottie_lower_third *ctx = (struct lottie_lower_third *)data;
 	return (uint32_t)ctx->lottie_height;
 }
 
-static struct obs_source_info test_source_info = {
-	.id = "test_lower_third",
+static struct obs_source_info lottie_lower_third_info = {
+	.id = "lottie_lower_third",
 	.type = OBS_SOURCE_TYPE_INPUT,
 	.output_flags = OBS_SOURCE_VIDEO | OBS_SOURCE_CUSTOM_DRAW,
-	.get_name = test_get_name,
-	.create = test_create,
-	.destroy = test_destroy,
-	.get_width = test_get_width,
-	.get_height = test_get_height,
-	.show = test_show,
-	.hide = test_hide,
-	.video_tick = test_video_tick,
-	.video_render = test_render,
-	.get_properties = test_get_properties,
-	.update = test_update,
-	.get_defaults = test_get_defaults,
+	.get_name = lottie_lower_third_get_name,
+	.create = lottie_lower_third_create,
+	.destroy = lottie_lower_third_destroy,
+	.get_width = lottie_lower_third_get_width,
+	.get_height = lottie_lower_third_get_height,
+	.show = lottie_lower_third_show,
+	.hide = lottie_lower_third_hide,
+	.video_tick = lottie_lower_third_video_tick,
+	.video_render = lottie_lower_third_render,
+	.get_properties = lottie_lower_third_get_properties,
+	.update = lottie_lower_third_update,
+	.get_defaults = lottie_lower_third_get_defaults,
 };
 
 // ── Registration ─────────────────────────────────────────
 
-void register_test_source(void)
+void register_lottie_lower_third_source(void)
 {
-	obs_register_source(&test_source_info);
-	blog(LOG_INFO, "[test_source] after registered");
+	obs_register_source(&lottie_lower_third_info);
 	obs_register_source(&passthrough_transition_info);
 }
 
-void unregister_test_source(void) {}
+void unregister_lottie_lower_third_source(void) {}

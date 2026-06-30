@@ -1,59 +1,28 @@
-# OBS Plugin Template
+# OBS Lottie Lower Third
 
-## Introduction
+OBS Lottie Lower Third is an OBS Studio source plugin for rendering animated Lottie lower-third graphics exported from After Effects.
 
-The plugin template is meant to be used as a starting point for OBS Studio plugin development. It includes:
+The source patches configured name/title text into selected Lottie text layers at load time, renders the animation through ThorVG, and manages show, hold, and hide playback using Lottie markers.
 
-* Boilerplate plugin source code
-* A CMake project file
-* GitHub Actions workflows and repository actions
+## Lottie Conventions
 
-## Supported Build Environments
+Expected text layer names:
 
-| Platform  | Tool   |
-|-----------|--------|
-| Windows   | Visual Studio 17 2022 |
-| macOS     | XCode 16.0 |
-| Windows, macOS  | CMake 3.30.5 |
-| Ubuntu 24.04 | CMake 3.28.3 |
-| Ubuntu 24.04 | `ninja-build` |
-| Ubuntu 24.04 | `pkg-config`
-| Ubuntu 24.04 | `build-essential` |
+* `NAME`
+* `SUBTITLE`
 
-## Quick Start
+Expected marker names:
 
-An absolute bare-bones [Quick Start Guide](https://github.com/obsproject/obs-plugintemplate/wiki/Quick-Start-Guide) is available in the wiki.
+* `intro`
+* `hold start`
+* `hold end` optional
+* `pvw time` optional
+* `outro`
 
-## Documentation
+If `hold end` is missing, the source holds on `hold start`. If `pvw time` is missing, the preview frame falls back to `hold start`.
 
-All documentation can be found in the [Plugin Template Wiki](https://github.com/obsproject/obs-plugintemplate/wiki).
+## Build
 
-Suggested reading to get up and running:
+This project uses a CMake/buildspec-based OBS plugin layout and vendors ThorVG for Lottie rendering.
 
-* [Getting started](https://github.com/obsproject/obs-plugintemplate/wiki/Getting-Started)
-* [Build system requirements](https://github.com/obsproject/obs-plugintemplate/wiki/Build-System-Requirements)
-* [Build system options](https://github.com/obsproject/obs-plugintemplate/wiki/CMake-Build-System-Options)
-
-## GitHub Actions & CI
-
-Default GitHub Actions workflows are available for the following repository actions:
-
-* `push`: Run for commits or tags pushed to `master` or `main` branches.
-* `pr-pull`: Run when a Pull Request has been pushed or synchronized.
-* `dispatch`: Run when triggered by the workflow dispatch in GitHub's user interface.
-* `build-project`: Builds the actual project and is triggered by other workflows.
-* `check-format`: Checks CMake and plugin source code formatting and is triggered by other workflows.
-
-The workflows make use of GitHub repository actions (contained in `.github/actions`) and build scripts (contained in `.github/scripts`) which are not needed for local development, but might need to be adjusted if additional/different steps are required to build the plugin.
-
-### Retrieving build artifacts
-
-Successful builds on GitHub Actions will produce build artifacts that can be downloaded for testing. These artifacts are commonly simple archives and will not contain package installers or installation programs.
-
-### Building a Release
-
-To create a release, an appropriately named tag needs to be pushed to the `main`/`master` branch using semantic versioning (e.g., `12.3.4`, `23.4.5-beta2`). A draft release will be created on the associated repository with generated installer packages or installation programs attached as release artifacts.
-
-## Signing and Notarizing on macOS
-
-Basic concepts of codesigning and notarization on macOS are explained in the correspodning [Wiki article](https://github.com/obsproject/obs-plugintemplate/wiki/Codesigning-On-macOS) which has a specific section for the [GitHub Actions setup](https://github.com/obsproject/obs-plugintemplate/wiki/Codesigning-On-macOS#setting-up-code-signing-for-github-actions).
+Local build details depend on the target platform and OBS dependency setup. The project metadata lives in `buildspec.json`, and the source implementation lives in `src/lottie-lower-third-source.c`.

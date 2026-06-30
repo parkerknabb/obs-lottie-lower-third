@@ -33,13 +33,13 @@
     },
     "platformConfig": {
         "macos": {
-            "bundleId": "com.parkerknabb.test-plugin"
+            "bundleId": "com.parkerknabb.obs-lottie-lower-third"
         }
     },
-    "name": "parker-test-obs-plugin",
-    "displayName": "Parker's test plugin",
+    "name": "obs-lottie-lower-third",
+    "displayName": "OBS Lottie Lower Third",
     "version": "1.0.0",
-    "author": "Your Name Here",
-    "website": "https://example.com",
-    "email": "me@example.com"
+    "author": "Parker Knabb",
+    "website": "https://github.com/parkerknabb/obs-lottie-lower-third",
+    "email": ""
 }
