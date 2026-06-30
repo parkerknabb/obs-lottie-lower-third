@@ -180,6 +180,7 @@ struct test_source {
 	bool lottie_loaded;
 	bool is_looping_hold;
 	bool has_hold_end_marker;
+	bool suppress_hidden_preview;
 	float last_rendered_lottie_frame;
 	uint32_t set_frame_failure_count;
 
@@ -246,18 +247,86 @@ static bool find_item_in_scenes_cb(void *data, obs_source_t *scene_source)
 
 // ── Marker parsing ────────────────────────────────────────
 
-static void parse_lottie_markers(struct test_source *ctx)
+static void reset_lottie_markers(struct test_source *ctx)
 {
-	if (!ctx->anim)
-		return;
-
-	// Default values
 	ctx->intro_start_frame = 0.0f;
 	ctx->hold_start_frame_lottie = -1.0f;
 	ctx->hold_end_frame_lottie = -1.0f;
 	ctx->outro_start_frame = -1.0f;
 	ctx->pvw_time_frame = -1.0f;
 	ctx->has_hold_end_marker = false;
+}
+
+static void apply_lottie_marker_defaults(struct test_source *ctx)
+{
+	if (ctx->hold_start_frame_lottie < 0) {
+		ctx->hold_start_frame_lottie = ctx->total_frames * 0.3f;
+	}
+	if (ctx->hold_end_frame_lottie < 0) {
+		ctx->hold_end_frame_lottie = ctx->hold_start_frame_lottie;
+	}
+	if (ctx->pvw_time_frame < 0) {
+		ctx->pvw_time_frame = ctx->hold_start_frame_lottie;
+	}
+	if (ctx->outro_start_frame < 0) {
+		ctx->outro_start_frame = ctx->total_frames * 0.8f;
+	}
+
+	blog(LOG_INFO,
+	     "[test_source] Markers parsed - intro: %.1f, hold start: %.1f, hold end: %.1f%s, pvw time: %.1f, outro: %.1f",
+	     ctx->intro_start_frame, ctx->hold_start_frame_lottie, ctx->hold_end_frame_lottie,
+	     ctx->has_hold_end_marker ? "" : " (static hold)", ctx->pvw_time_frame, ctx->outro_start_frame);
+}
+
+static void set_lottie_marker(struct test_source *ctx, const char *name, float frame)
+{
+	if (strcmp(name, "intro") == 0) {
+		ctx->intro_start_frame = frame;
+	} else if (strcmp(name, "hold start") == 0 || strcmp(name, "hold_start") == 0) {
+		ctx->hold_start_frame_lottie = frame;
+	} else if (strcmp(name, "hold end") == 0 || strcmp(name, "hold_end") == 0) {
+		ctx->hold_end_frame_lottie = frame;
+		ctx->has_hold_end_marker = true;
+	} else if (strcmp(name, "outro") == 0) {
+		ctx->outro_start_frame = frame;
+	} else if (strcmp(name, "pvw time") == 0 || strcmp(name, "pvw_time") == 0) {
+		ctx->pvw_time_frame = frame;
+	}
+}
+
+static bool parse_lottie_markers_from_json(cJSON *root, struct test_source *ctx)
+{
+	cJSON *markers = root ? cJSON_GetObjectItemCaseSensitive(root, "markers") : NULL;
+	if (!cJSON_IsArray(markers))
+		return false;
+
+	reset_lottie_markers(ctx);
+
+	int marker_count = cJSON_GetArraySize(markers);
+	blog(LOG_INFO, "[test_source] Found %d JSON markers", marker_count);
+
+	cJSON *marker = NULL;
+	cJSON_ArrayForEach(marker, markers)
+	{
+		cJSON *name = cJSON_GetObjectItemCaseSensitive(marker, "cm");
+		cJSON *time = cJSON_GetObjectItemCaseSensitive(marker, "tm");
+
+		if (!cJSON_IsString(name) || !cJSON_IsNumber(time))
+			continue;
+
+		blog(LOG_INFO, "[test_source] JSON marker: %s frame=%.1f", name->valuestring, time->valuedouble);
+		set_lottie_marker(ctx, name->valuestring, (float)time->valuedouble);
+	}
+
+	return marker_count > 0;
+}
+
+static void parse_lottie_markers(struct test_source *ctx)
+{
+	if (!ctx->anim)
+		return;
+
+	reset_lottie_markers(ctx);
 
 	uint32_t marker_count = 0;
 	tvg_lottie_animation_get_markers_cnt(ctx->anim, &marker_count);
@@ -271,35 +340,11 @@ static void parse_lottie_markers(struct test_source *ctx)
 
 		if (name) {
 			blog(LOG_INFO, "[test_source] Marker [%u]: %s begin=%.1f end=%.1f", i, name, begin, end);
-			if (strcmp(name, "intro") == 0) {
-				ctx->intro_start_frame = begin;
-			} else if (strcmp(name, "hold_start") == 0) {
-				ctx->hold_start_frame_lottie = begin;
-			} else if (strcmp(name, "hold_end") == 0) {
-				ctx->hold_end_frame_lottie = begin;
-				ctx->has_hold_end_marker = true;
-			} else if (strcmp(name, "outro") == 0) {
-				ctx->outro_start_frame = begin;
-			} else if (strcmp(name, "pvw_time") == 0) {
-				ctx->pvw_time_frame = begin;
-			}
+			set_lottie_marker(ctx, name, begin);
 		}
 	}
 
-	// Set defaults if markers not found
-	if (ctx->hold_start_frame_lottie < 0) {
-		ctx->hold_start_frame_lottie = ctx->total_frames * 0.3f;
-	}
-	if (ctx->hold_end_frame_lottie < 0) {
-		ctx->hold_end_frame_lottie = ctx->hold_start_frame_lottie;
-	}
-	if (ctx->outro_start_frame < 0) {
-		ctx->outro_start_frame = ctx->total_frames * 0.8f;
-	}
-
-	blog(LOG_INFO, "[test_source] Markers parsed - intro: %.1f, hold_start: %.1f, hold_end: %.1f%s, outro: %.1f",
-	     ctx->intro_start_frame, ctx->hold_start_frame_lottie, ctx->hold_end_frame_lottie,
-	     ctx->has_hold_end_marker ? "" : " (static hold)", ctx->outro_start_frame);
+	apply_lottie_marker_defaults(ctx);
 }
 
 // ───────────────────────────────────
@@ -461,25 +506,26 @@ static void patch_lower_third_text_layer(cJSON *layer, struct test_source *ctx)
 	if (!cJSON_IsObject(layer))
 		return;
 
-	if (layer_matches_text_id(layer, "#text1", "text1")) {
+	if (layer_matches_text_id(layer, "NAME", "NAME")) {
 		if (patch_text_document_value(layer, ctx->text1_value)) {
 			ctx->has_text1 = true;
-			blog(LOG_INFO, "[test_source] Patched #text1 / text1");
+			blog(LOG_INFO, "[test_source] Patched NAME text layer");
 		} else {
-			blog(LOG_WARNING, "[test_source] Found #text1 layer but could not patch text document");
+			blog(LOG_WARNING, "[test_source] Found NAME layer but could not patch text document");
 		}
 	}
 
-	if (layer_matches_text_id(layer, "#text2", "text2")) {
+	if (layer_matches_text_id(layer, "SUBTITLE", "SUBTITLE")) {
 		if (patch_text_document_value(layer, ctx->text2_value)) {
 			ctx->has_text2 = true;
-			blog(LOG_INFO, "[test_source] Patched #text2 / text2");
+			blog(LOG_INFO, "[test_source] Patched SUBTITLE text layer");
 		} else {
-			blog(LOG_WARNING, "[test_source] Found #text2 layer but could not patch text document");
+			blog(LOG_WARNING, "[test_source] Found SUBTITLE layer but could not patch text document");
 		}
 	}
 }
-static bool is_text_layer(cJSON *layer, const char *nm_name, const char *ln_name)
+static bool is_text_layer(cJSON *layer, const char *primary_nm, const char *primary_ln, const char *fallback_nm,
+			  const char *fallback_ln)
 {
 	cJSON *ty = cJSON_GetObjectItemCaseSensitive(layer, "ty");
 	if (!cJSON_IsNumber(ty) || ty->valueint != 5)
@@ -488,10 +534,16 @@ static bool is_text_layer(cJSON *layer, const char *nm_name, const char *ln_name
 	cJSON *nm = cJSON_GetObjectItemCaseSensitive(layer, "nm");
 	cJSON *ln = cJSON_GetObjectItemCaseSensitive(layer, "ln");
 
-	if (cJSON_IsString(nm) && strcmp(nm->valuestring, nm_name) == 0)
+	if (cJSON_IsString(nm) && strcmp(nm->valuestring, primary_nm) == 0)
 		return true;
 
-	if (cJSON_IsString(ln) && strcmp(ln->valuestring, ln_name) == 0)
+	if (cJSON_IsString(ln) && strcmp(ln->valuestring, primary_ln) == 0)
+		return true;
+
+	if (fallback_nm && cJSON_IsString(nm) && strcmp(nm->valuestring, fallback_nm) == 0)
+		return true;
+
+	if (fallback_ln && cJSON_IsString(ln) && strcmp(ln->valuestring, fallback_ln) == 0)
 		return true;
 
 	return false;
@@ -512,17 +564,17 @@ static void patch_lottie_text_layers(cJSON *node, struct test_source *ctx)
 				if (!cJSON_IsObject(layer))
 					continue;
 
-				if (is_text_layer(layer, "#text1", "text1")) {
+				if (is_text_layer(layer, "NAME", "NAME", "#text1", "text1")) {
 					if (patch_text_document_value(layer, ctx->text1_value)) {
 						ctx->has_text1 = true;
-						blog(LOG_INFO, "[test_source] Patched #text1");
+						blog(LOG_INFO, "[test_source] Patched NAME");
 					}
 				}
 
-				if (is_text_layer(layer, "#text2", "text2")) {
+				if (is_text_layer(layer, "SUBTITLE", "SUBTITLE", "#text2", "text2")) {
 					if (patch_text_document_value(layer, ctx->text2_value)) {
 						ctx->has_text2 = true;
-						blog(LOG_INFO, "[test_source] Patched #text2");
+						blog(LOG_INFO, "[test_source] Patched SUBTITLE");
 					}
 				}
 
@@ -634,18 +686,18 @@ static bool load_lottie_with_current_text(struct test_source *ctx)
 	patch_lottie_text_layers(root, ctx);
 
 	if (!ctx->has_text1)
-		blog(LOG_WARNING, "[test_source] #text1/text1 layer not found");
+		blog(LOG_WARNING, "[test_source] NAME text layer not found");
 
 	if (!ctx->has_text2)
-		blog(LOG_WARNING, "[test_source] #text2/text2 layer not found");
+		blog(LOG_WARNING, "[test_source] SUBTITLE text layer not found");
 
-	warn_missing_text_glyphs(root, "#text1", ctx->text1_value);
-	warn_missing_text_glyphs(root, "#text2", ctx->text2_value);
+	warn_missing_text_glyphs(root, "NAME", ctx->text1_value);
+	warn_missing_text_glyphs(root, "SUBTITLE", ctx->text2_value);
 
 	char *patched_json = cJSON_PrintUnformatted(root);
-	cJSON_Delete(root);
 
 	if (!patched_json) {
+		cJSON_Delete(root);
 		blog(LOG_ERROR, "[test_source] Failed to serialize patched Lottie JSON");
 		return false;
 	}
@@ -653,8 +705,11 @@ static bool load_lottie_with_current_text(struct test_source *ctx)
 	/*
      * If this source had already loaded a Lottie, reset the ThorVG objects.
      * This avoids repeatedly adding old pictures to the same canvas.
-     */
+	 */
 	unload_lottie(ctx);
+
+	bool parsed_json_markers = parse_lottie_markers_from_json(root, ctx);
+	cJSON_Delete(root);
 
 	if (!ctx->anim || !ctx->pic) {
 		cJSON_free(patched_json);
@@ -712,7 +767,11 @@ static bool load_lottie_with_current_text(struct test_source *ctx)
 
 	ctx->lottie_loaded = true;
 
-	parse_lottie_markers(ctx);
+	if (parsed_json_markers) {
+		apply_lottie_marker_defaults(ctx);
+	} else {
+		parse_lottie_markers(ctx);
+	}
 
 	ctx->current_lottie_frame = ctx->intro_start_frame;
 
@@ -828,6 +887,7 @@ static void test_source_begin_exit(struct test_source *ctx)
 		     ctx->current_lottie_frame);
 
 		ctx->state = STATE_EXITING;
+		ctx->suppress_hidden_preview = true;
 
 		/*
          * Important:
@@ -948,15 +1008,17 @@ static bool render_lottie_frame_to_buffer(struct test_source *ctx, float frame)
 	Tvg_Result result;
 
 	result = tvg_animation_set_frame(ctx->anim, frame);
-	if (result != TVG_RESULT_SUCCESS) {
+	if (result == TVG_RESULT_INSUFFICIENT_CONDITION) {
+		ctx->set_frame_failure_count = 0;
+	} else if (result != TVG_RESULT_SUCCESS) {
 		ctx->set_frame_failure_count++;
 		blog(LOG_WARNING,
 		     "[test_source] tvg_animation_set_frame failed at frame %.3f; preserving previous rendered frame %.3f",
 		     frame, ctx->last_rendered_lottie_frame);
 		return true;
+	} else {
+		ctx->set_frame_failure_count = 0;
 	}
-
-	ctx->set_frame_failure_count = 0;
 
 	size_t buffer_bytes = (size_t)ctx->buffer_width * (size_t)ctx->buffer_height * sizeof(uint32_t);
 
@@ -1088,6 +1150,7 @@ static void test_show(void *data)
 	blog(LOG_INFO, "[test_source] show");
 
 	ctx->state = STATE_ENTERING;
+	ctx->suppress_hidden_preview = false;
 	ctx->current_frame = 0;
 	ctx->is_looping_hold = false;
 
@@ -1165,6 +1228,7 @@ static void test_hide(void *data)
 {
 	struct test_source *ctx = (struct test_source *)data;
 	blog(LOG_INFO, "[test_source] hide: state=%d", ctx->state);
+	ctx->suppress_hidden_preview = true;
 	// The exit animation is handled by the transition callback
 }
 
@@ -1200,6 +1264,7 @@ static void *test_create(obs_data_t *settings, obs_source_t *source)
 	struct test_source *ctx = bzalloc(sizeof(struct test_source));
 	ctx->source = source;
 	ctx->state = STATE_HIDDEN;
+	ctx->suppress_hidden_preview = false;
 	ctx->hold_start_frame = 30;
 
 	ctx->buffer_width = 1920;
@@ -1484,6 +1549,9 @@ static void test_render(void *data, gs_effect_t *effect)
 	if (!ctx->lottie_loaded)
 		return;
 
+	if (ctx->state == STATE_HIDDEN && ctx->suppress_hidden_preview)
+		return;
+
 	float frame = ctx->current_lottie_frame;
 
 	/*
@@ -1540,33 +1608,26 @@ static void test_source_tick_exit(struct test_source *ctx, uint32_t cx, uint32_t
 		}
 	}
 
-	// Render current Lottie frame
-	if (ctx->lottie_loaded) {
-		if (render_lottie_to_buffer(ctx)) {
-			render_buffer_to_obs(ctx, (uint32_t)ctx->buffer_width, (uint32_t)ctx->buffer_height);
-		}
-	} else {
-		/*
-         * If the Lottie is unavailable during hide, preserve passthrough.
-         * The transition callback receives texture A as `a`.
-         */
-		if (a) {
-			gs_effect_t *default_effect = obs_get_base_effect(OBS_EFFECT_DEFAULT);
+	/*
+	 * OBS has already rendered this source into texture A using test_render().
+	 * Draw that captured source texture instead of rendering a second copy here;
+	 * double-rendering during the item transition can brighten translucent pixels.
+	 */
+	if (!a)
+		return;
 
-			if (!default_effect)
-				return;
+	gs_effect_t *default_effect = obs_get_base_effect(OBS_EFFECT_DEFAULT);
+	if (!default_effect)
+		return;
 
-			gs_eparam_t *image = gs_effect_get_param_by_name(default_effect, "image");
+	gs_eparam_t *image = gs_effect_get_param_by_name(default_effect, "image");
+	if (!image)
+		return;
 
-			if (!image)
-				return;
+	gs_effect_set_texture(image, a);
 
-			gs_effect_set_texture(image, a);
-
-			while (gs_effect_loop(default_effect, "Draw"))
-				gs_draw_sprite(a, 0, cx, cy);
-		}
-	}
+	while (gs_effect_loop(default_effect, "Draw"))
+		gs_draw_sprite(a, 0, cx, cy);
 }
 
 static uint32_t test_get_width(void *data)
