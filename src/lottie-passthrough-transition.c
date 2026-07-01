@@ -114,8 +114,8 @@ void lottie_passthrough_transition_register(void)
 
 obs_source_t *lottie_passthrough_transition_create(struct lottie_lower_third *owner)
 {
-	obs_source_t *transition =
-		obs_source_create_private("lottie_lower_third_passthrough_transition", "lower_third_hide_transition", NULL);
+	obs_source_t *transition = obs_source_create_private("lottie_lower_third_passthrough_transition",
+							     "lower_third_hide_transition", NULL);
 
 	if (!transition)
 		return NULL;

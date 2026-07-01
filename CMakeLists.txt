@@ -67,11 +67,12 @@ endif()
 
 if(ENABLE_QT)
   if(APPLE)
-    set(WrapOpenGL_AGL
-        "WrapOpenGL_AGL-NOTFOUND"
-        CACHE FILEPATH
-        "AGL is unavailable in newer macOS SDKs and is not needed by this plugin."
-        FORCE
+    set(
+      WrapOpenGL_AGL
+      "WrapOpenGL_AGL-NOTFOUND"
+      CACHE FILEPATH
+      "AGL is unavailable in newer macOS SDKs and is not needed by this plugin."
+      FORCE
     )
   endif()
   find_package(Qt6 REQUIRED COMPONENTS Widgets Core)

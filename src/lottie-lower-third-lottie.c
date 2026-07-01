@@ -82,7 +82,8 @@ static bool patch_text_document_value(cJSON *layer, const char *new_text)
 		return false;
 
 	cJSON *keyframe = NULL;
-	cJSON_ArrayForEach(keyframe, k) {
+	cJSON_ArrayForEach(keyframe, k)
+	{
 		cJSON *s = cJSON_GetObjectItemCaseSensitive(keyframe, "s");
 		cJSON *text = s ? cJSON_GetObjectItemCaseSensitive(s, "t") : NULL;
 

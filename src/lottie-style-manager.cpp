@@ -69,9 +69,10 @@ static void add_valid_files_to_list(QWidget *parent, QListWidget *list, const QS
 	add_files_to_list(list, valid_paths);
 
 	if (skipped > 0) {
-		QMessageBox::warning(parent, QStringLiteral("Invalid Lottie JSON"),
-				     QStringLiteral("%1 selected JSON file(s) were not valid Lottie animations and were ignored.")
-					     .arg(skipped));
+		QMessageBox::warning(
+			parent, QStringLiteral("Invalid Lottie JSON"),
+			QStringLiteral("%1 selected JSON file(s) were not valid Lottie animations and were ignored.")
+				.arg(skipped));
 	}
 }
 
@@ -127,9 +128,8 @@ static void open_style_manager_dialog(void *)
 		add_valid_files_to_list(&dialog, files_list, paths);
 	});
 
-	QObject::connect(remove_files, &QPushButton::clicked, [files_list]() {
-		qDeleteAll(files_list->selectedItems());
-	});
+	QObject::connect(remove_files, &QPushButton::clicked,
+			 [files_list]() { qDeleteAll(files_list->selectedItems()); });
 
 	QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
 	QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);

@@ -134,9 +134,9 @@ bool lottie_style_library_is_valid_lottie_file(const char *path)
 	cJSON *layers = cJSON_GetObjectItemCaseSensitive(root, "layers");
 
 	bool valid = cJSON_IsString(version) && cJSON_IsNumber(framerate) && framerate->valuedouble > 0.0 &&
-		     cJSON_IsNumber(in_point) && cJSON_IsNumber(out_point) && out_point->valuedouble > in_point->valuedouble &&
-		     cJSON_IsNumber(width) && width->valueint > 0 && cJSON_IsNumber(height) && height->valueint > 0 &&
-		     cJSON_IsArray(layers);
+		     cJSON_IsNumber(in_point) && cJSON_IsNumber(out_point) &&
+		     out_point->valuedouble > in_point->valuedouble && cJSON_IsNumber(width) && width->valueint > 0 &&
+		     cJSON_IsNumber(height) && height->valueint > 0 && cJSON_IsArray(layers);
 
 	cJSON_Delete(root);
 	return valid;

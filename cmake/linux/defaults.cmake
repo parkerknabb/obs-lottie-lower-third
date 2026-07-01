@@ -53,12 +53,7 @@ if(NOT TARGET OBS::libobs)
   add_library(OBS::libobs ALIAS libobs)
 
   if(ENABLE_FRONTEND_API)
-    find_path(
-      obs-frontend-api_INCLUDE_DIR
-      NAMES obs-frontend-api.h
-      PATH_SUFFIXES obs
-      REQUIRED
-    )
+    find_path(obs-frontend-api_INCLUDE_DIR NAMES obs-frontend-api.h PATH_SUFFIXES obs REQUIRED)
 
     find_library(obs-frontend-api_LIBRARY NAMES obs-frontend-api REQUIRED)
 

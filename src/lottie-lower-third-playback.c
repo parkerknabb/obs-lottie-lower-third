@@ -76,8 +76,8 @@ void lottie_lower_third_video_tick(void *data, float seconds)
 		if (ctx->is_looping_hold) {
 			ctx->current_lottie_frame += frame_advance;
 			if (ctx->current_lottie_frame > ctx->hold_end_frame_lottie) {
-				ctx->current_lottie_frame =
-					lottie_lower_third_stable_marker_render_frame(ctx, ctx->hold_start_frame_lottie);
+				ctx->current_lottie_frame = lottie_lower_third_stable_marker_render_frame(
+					ctx, ctx->hold_start_frame_lottie);
 			}
 		} else {
 			ctx->current_lottie_frame =
