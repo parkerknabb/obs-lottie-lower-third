@@ -1,6 +1,9 @@
 #include <obs-module.h>
 #include <plugin-support.h>
+#include "lottie-style-library.h"
 #include <thorvg_capi.h>
+#include <util/platform.h>
+#include <graphics/vec2.h>
 #include <stdio.h>
 #include <string.h>
 #include <cJSON.h>
@@ -145,6 +148,8 @@ struct lottie_lower_third {
 
 	// Lottie-specific fields
 	char *lottie_path;
+	char *style_path;
+	bool custom_file;
 	Tvg_Canvas canvas;
 	Tvg_Animation anim;
 	Tvg_Paint pic;
@@ -178,9 +183,16 @@ struct lottie_lower_third {
 	char *text2_value;
 	bool has_text1;
 	bool has_text2;
+	bool default_placement_pending;
 };
 
+static const char *SETTING_STYLE_PATH = "lottie_style";
+static const char *SETTING_CUSTOM_FILE = "custom_file";
+static const char *SETTING_LOTTIE_PATH = "lottie_path";
+static const char *SETTING_PLACEMENT_INITIALIZED = "__lottie_lower_third_placement_initialized";
+
 static void scene_item_visible(void *data, calldata_t *params);
+static void scene_item_add(void *data, calldata_t *params);
 static void global_source_create(void *data, calldata_t *params);
 
 static void detach_hide_transition_owner(struct lottie_lower_third *ctx)
@@ -389,10 +401,28 @@ static bool set_bstr(char **dst, const char *src)
 
 	return true;
 }
+
+static bool setting_has_user_value(obs_data_t *settings, const char *name)
+{
+	return settings && obs_data_has_user_value(settings, name);
+}
+
+static const char *get_effective_lottie_path_from_settings(obs_data_t *settings)
+{
+	const char *style_path = obs_data_get_string(settings, SETTING_STYLE_PATH);
+	const char *custom_path = obs_data_get_string(settings, SETTING_LOTTIE_PATH);
+	bool custom_file = obs_data_get_bool(settings, SETTING_CUSTOM_FILE);
+
+	return custom_file ? custom_path : style_path;
+}
+
 static void lottie_lower_third_get_defaults(obs_data_t *settings)
 {
 	obs_data_set_default_string(settings, "text1", "Main Text");
 	obs_data_set_default_string(settings, "text2", "Subtext");
+	obs_data_set_default_bool(settings, SETTING_CUSTOM_FILE, false);
+	obs_data_set_default_string(settings, SETTING_STYLE_PATH, "");
+	obs_data_set_default_bool(settings, SETTING_PLACEMENT_INITIALIZED, false);
 }
 
 static bool layer_matches_text_id(cJSON *layer, const char *wanted_nm, const char *wanted_ln)
@@ -1064,12 +1094,159 @@ static float get_lottie_preview_frame(struct lottie_lower_third *ctx)
 	return ctx->total_frames * 0.3f;
 }
 
+static bool has_json_extension(const char *path)
+{
+	if (!path)
+		return false;
+
+	const char *dot = strrchr(path, '.');
+	if (!dot)
+		return false;
+
+	return (dot[0] == '.') && (dot[1] == 'j' || dot[1] == 'J') && (dot[2] == 's' || dot[2] == 'S') &&
+	       (dot[3] == 'o' || dot[3] == 'O') && (dot[4] == 'n' || dot[4] == 'N') && dot[5] == '\0';
+}
+
+static const char *path_basename(const char *path)
+{
+	if (!path)
+		return "";
+
+	const char *slash = strrchr(path, '/');
+	const char *backslash = strrchr(path, '\\');
+	const char *base = slash > backslash ? slash : backslash;
+
+	return base ? base + 1 : path;
+}
+
+static char *style_display_name(const char *path)
+{
+	const char *base = path_basename(path);
+	char *name = bstrdup(base);
+	char *dot = strrchr(name, '.');
+
+	if (dot && has_json_extension(dot))
+		*dot = '\0';
+
+	return name;
+}
+
+static void add_style_path(obs_property_t *style_list, const char *path)
+{
+	if (!style_list || !path || !*path || !lottie_style_library_is_valid_lottie_file(path))
+		return;
+
+	char *display_name = style_display_name(path);
+	obs_property_list_add_string(style_list, display_name, path);
+	bfree(display_name);
+}
+
+static void add_style_files_from_text(obs_property_t *style_list, const char *paths)
+{
+	if (!paths || !*paths)
+		return;
+
+	char *copy = bstrdup(paths);
+	char *next = copy;
+
+	while (next && *next) {
+		char *line = next;
+		next = strpbrk(line, "\r\n;");
+
+		if (next) {
+			*next = '\0';
+			next++;
+		}
+
+		while (*line == ' ' || *line == '\t')
+			line++;
+
+		char *end = line + strlen(line);
+		while (end > line && (end[-1] == ' ' || end[-1] == '\t'))
+			*--end = '\0';
+
+		add_style_path(style_list, line);
+	}
+
+	bfree(copy);
+}
+
+static void add_style_files_from_dir(obs_property_t *style_list, const char *dir_path)
+{
+	if (!dir_path || !*dir_path)
+		return;
+
+	os_dir_t *dir = os_opendir(dir_path);
+	if (!dir)
+		return;
+
+	struct os_dirent *entry = NULL;
+	while ((entry = os_readdir(dir)) != NULL) {
+		if (entry->directory || !has_json_extension(entry->d_name))
+			continue;
+
+		size_t dir_len = strlen(dir_path);
+		bool needs_sep = dir_len > 0 && dir_path[dir_len - 1] != '/' && dir_path[dir_len - 1] != '\\';
+		size_t path_len = dir_len + (needs_sep ? 1 : 0) + strlen(entry->d_name) + 1;
+		char *full_path = bmalloc(path_len);
+
+		snprintf(full_path, path_len, "%s%s%s", dir_path, needs_sep ? "/" : "", entry->d_name);
+		add_style_path(style_list, full_path);
+		bfree(full_path);
+	}
+
+	os_closedir(dir);
+}
+
+static void populate_style_list(obs_property_t *style_list)
+{
+	if (!style_list)
+		return;
+
+	obs_property_list_clear(style_list);
+	obs_property_list_add_string(style_list, "Select a style...", "");
+
+	add_style_files_from_text(style_list, lottie_style_library_get_files());
+	add_style_files_from_dir(style_list, lottie_style_library_get_dir());
+}
+
+static bool custom_file_modified(obs_properties_t *props, obs_property_t *property, obs_data_t *settings)
+{
+	UNUSED_PARAMETER(property);
+
+	bool custom_file = obs_data_get_bool(settings, SETTING_CUSTOM_FILE);
+	obs_property_t *style = obs_properties_get(props, SETTING_STYLE_PATH);
+	obs_property_t *path = obs_properties_get(props, SETTING_LOTTIE_PATH);
+
+	if (style)
+		obs_property_set_visible(style, !custom_file);
+	if (path)
+		obs_property_set_visible(path, custom_file);
+
+	return true;
+}
+
 static obs_properties_t *lottie_lower_third_get_properties(void *data)
 {
-	UNUSED_PARAMETER(data);
+	struct lottie_lower_third *ctx = (struct lottie_lower_third *)data;
 	obs_properties_t *props = obs_properties_create();
 
-	obs_properties_add_path(props, "lottie_path", "Lottie File", OBS_PATH_FILE, "Lottie files (*.json)", NULL);
+	obs_property_t *custom = obs_properties_add_bool(props, SETTING_CUSTOM_FILE, "Custom File");
+	obs_property_t *style = obs_properties_add_list(props, SETTING_STYLE_PATH, "Style", OBS_COMBO_TYPE_LIST,
+							OBS_COMBO_FORMAT_STRING);
+	obs_property_t *path = obs_properties_add_path(props, SETTING_LOTTIE_PATH, "Lottie File", OBS_PATH_FILE,
+						       "Lottie files (*.json)", NULL);
+
+	obs_property_set_modified_callback(custom, custom_file_modified);
+
+	populate_style_list(style);
+
+	if (ctx)
+		obs_property_set_visible(path, ctx->custom_file);
+	else
+		obs_property_set_visible(path, false);
+
+	obs_property_set_visible(style, !ctx || !ctx->custom_file);
 
 	obs_properties_add_text(props, "text1", "Name", OBS_TEXT_DEFAULT);
 	obs_properties_add_text(props, "text2", "Title", OBS_TEXT_DEFAULT);
@@ -1084,6 +1261,7 @@ static void connect_scene_signals(struct lottie_lower_third *ctx, obs_source_t *
 	if (!obs_scene_from_source(scene_source) && !obs_group_from_source(scene_source))
 		return;
 	signal_handler_t *handler = obs_source_get_signal_handler(scene_source);
+	signal_handler_connect(handler, "item_add", scene_item_add, ctx);
 	signal_handler_connect(handler, "item_visible", scene_item_visible, ctx);
 }
 
@@ -1092,6 +1270,7 @@ static void disconnect_scene_signals(struct lottie_lower_third *ctx, obs_source_
 	if (!obs_scene_from_source(scene_source) && !obs_group_from_source(scene_source))
 		return;
 	signal_handler_t *handler = obs_source_get_signal_handler(scene_source);
+	signal_handler_disconnect(handler, "item_add", scene_item_add, ctx);
 	signal_handler_disconnect(handler, "item_visible", scene_item_visible, ctx);
 }
 
@@ -1171,6 +1350,44 @@ static void scene_item_visible(void *data, calldata_t *params)
 	}
 }
 
+static void place_sceneitem_bottom_left(struct lottie_lower_third *ctx, obs_sceneitem_t *item)
+{
+	if (!ctx || !item)
+		return;
+
+	struct obs_video_info ovi;
+	if (!obs_get_video_info(&ovi))
+		return;
+
+	struct vec2 current_pos;
+	obs_sceneitem_get_pos(item, &current_pos);
+	if (current_pos.x != 0.0f || current_pos.y != 0.0f)
+		return;
+
+	float source_height = ctx->lottie_height > 0.0f ? ctx->lottie_height : (float)ctx->buffer_height;
+	struct vec2 pos = {
+		.x = 0.0f,
+		.y = (float)ovi.base_height - source_height,
+	};
+
+	if (pos.y < 0.0f)
+		pos.y = 0.0f;
+
+	obs_sceneitem_set_pos(item, &pos);
+}
+
+static void scene_item_add(void *data, calldata_t *params)
+{
+	struct lottie_lower_third *ctx = (struct lottie_lower_third *)data;
+	obs_sceneitem_t *item = calldata_ptr(params, "item");
+
+	if (!ctx || !ctx->default_placement_pending || !item || obs_sceneitem_get_source(item) != ctx->source)
+		return;
+
+	place_sceneitem_bottom_left(ctx, item);
+	ctx->default_placement_pending = false;
+}
+
 // ── Source lifecycle ──────────────────────────────────────
 
 static void *lottie_lower_third_create(obs_data_t *settings, obs_source_t *source)
@@ -1215,14 +1432,21 @@ static void *lottie_lower_third_create(obs_data_t *settings, obs_source_t *sourc
 	ctx->lottie_width = 1920.0f;
 	ctx->lottie_height = 1080.0f;
 	ctx->is_looping_hold = false;
+	ctx->default_placement_pending = !setting_has_user_value(settings, SETTING_PLACEMENT_INITIALIZED) ||
+					 !obs_data_get_bool(settings, SETTING_PLACEMENT_INITIALIZED);
+	obs_data_set_bool(settings, SETTING_PLACEMENT_INITIALIZED, true);
 
 	ctx->texture = NULL;
 	ctx->texture_width = 0;
 	ctx->texture_height = 0;
 	ctx->lottie_fps = 30.0f;
 
-	// Get Lottie file path from settings - add proper validation
-	const char *lottie_path = obs_data_get_string(settings, "lottie_path");
+	ctx->custom_file = obs_data_get_bool(settings, SETTING_CUSTOM_FILE);
+	const char *style_path = obs_data_get_string(settings, SETTING_STYLE_PATH);
+	const char *lottie_path = get_effective_lottie_path_from_settings(settings);
+
+	ctx->style_path = bstrdup(style_path ? style_path : "");
+
 	if (lottie_path && strlen(lottie_path) > 0) {
 		ctx->lottie_path = bstrdup(lottie_path);
 	} else {
@@ -1254,10 +1478,21 @@ static void lottie_lower_third_update(void *data, obs_data_t *settings)
 
 	bool changed = false;
 
-	const char *lottie_path = obs_data_get_string(settings, "lottie_path");
+	obs_data_set_bool(settings, SETTING_PLACEMENT_INITIALIZED, true);
+
+	const char *style_path = obs_data_get_string(settings, SETTING_STYLE_PATH);
+	const char *custom_path = obs_data_get_string(settings, SETTING_LOTTIE_PATH);
+	bool custom_file = obs_data_get_bool(settings, SETTING_CUSTOM_FILE);
+
+	const char *lottie_path = custom_file ? custom_path : style_path;
 	const char *text1 = obs_data_get_string(settings, "text1");
 	const char *text2 = obs_data_get_string(settings, "text2");
 
+	if (ctx->custom_file != custom_file) {
+		ctx->custom_file = custom_file;
+		changed = true;
+	}
+	changed |= set_bstr(&ctx->style_path, style_path);
 	changed |= set_bstr(&ctx->text1_value, text1);
 	changed |= set_bstr(&ctx->text2_value, text2);
 
@@ -1324,6 +1559,8 @@ static void lottie_lower_third_destroy(void *data)
 
 	if (ctx->lottie_path)
 		bfree(ctx->lottie_path);
+	if (ctx->style_path)
+		bfree(ctx->style_path);
 	if (ctx->canvas)
 		tvg_canvas_destroy(ctx->canvas);
 	if (ctx->anim)

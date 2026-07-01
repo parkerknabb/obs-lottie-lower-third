@@ -22,6 +22,8 @@ with this program. If not, see <https://www.gnu.org/licenses/>
 
 extern void register_lottie_lower_third_source(void);
 extern void unregister_lottie_lower_third_source(void);
+extern void register_lottie_style_manager(void);
+extern void unregister_lottie_style_manager(void);
 
 OBS_DECLARE_MODULE()
 OBS_MODULE_USE_DEFAULT_LOCALE(PLUGIN_NAME, "en-US")
@@ -31,12 +33,14 @@ bool obs_module_load(void)
 	obs_log(LOG_INFO, "OBS Lottie Lower Third loaded successfully (version %s)", PLUGIN_VERSION);
 	tvg_engine_init(0);
 	register_lottie_lower_third_source();
+	register_lottie_style_manager();
 
 	return true;
 }
 
 void obs_module_unload(void)
 {
+	unregister_lottie_style_manager();
 	tvg_engine_term();
 	obs_log(LOG_INFO, "OBS Lottie Lower Third unloaded");
 }

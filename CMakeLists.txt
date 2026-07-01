@@ -4,8 +4,8 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/common/bootstrap.cmake" NO_POLICY_SCO
 
 project(${_name} VERSION ${_version})
 
-option(ENABLE_FRONTEND_API "Use obs-frontend-api for UI functionality" OFF)
-option(ENABLE_QT "Use Qt functionality" OFF)
+option(ENABLE_FRONTEND_API "Use obs-frontend-api for UI functionality" ON)
+option(ENABLE_QT "Use Qt functionality" ON)
 option(USE_BUNDLED_THORVG "Build the bundled ThorVG third-party source" ON)
 
 include(compilerconfig)
@@ -52,7 +52,22 @@ if(ENABLE_FRONTEND_API)
 endif()
 
 if(ENABLE_QT)
+  if(APPLE)
+    set(WrapOpenGL_AGL
+        "WrapOpenGL_AGL-NOTFOUND"
+        CACHE FILEPATH
+        "AGL is unavailable in newer macOS SDKs and is not needed by this plugin."
+        FORCE
+    )
+  endif()
   find_package(Qt6 COMPONENTS Widgets Core)
+  if(APPLE AND TARGET WrapOpenGL::WrapOpenGL)
+    get_target_property(_wrap_opengl_libs WrapOpenGL::WrapOpenGL INTERFACE_LINK_LIBRARIES)
+    if(_wrap_opengl_libs)
+      list(FILTER _wrap_opengl_libs EXCLUDE REGEX "AGL")
+      set_target_properties(WrapOpenGL::WrapOpenGL PROPERTIES INTERFACE_LINK_LIBRARIES "${_wrap_opengl_libs}")
+    endif()
+  endif()
   target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE Qt6::Core Qt6::Widgets)
   target_compile_options(
     ${CMAKE_PROJECT_NAME}
@@ -64,7 +79,15 @@ if(ENABLE_QT)
   )
 endif()
 
-target_sources(${CMAKE_PROJECT_NAME} PRIVATE src/plugin-main.c src/lottie-lower-third-source.c deps/cJSON/cJSON.c)
+target_sources(
+  ${CMAKE_PROJECT_NAME}
+  PRIVATE
+    src/plugin-main.c
+    src/lottie-lower-third-source.c
+    src/lottie-style-library.c
+    src/lottie-style-manager.cpp
+    deps/cJSON/cJSON.c
+)
 target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE deps/cJSON)
 if(USE_BUNDLED_THORVG)
   target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE TVG_STATIC=1)
