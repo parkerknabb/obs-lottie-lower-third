@@ -8,6 +8,20 @@ option(ENABLE_FRONTEND_API "Use obs-frontend-api for UI functionality" ON)
 option(ENABLE_QT "Use Qt functionality" ON)
 option(USE_BUNDLED_THORVG "Build the bundled ThorVG third-party source" ON)
 
+function(remove_agl_framework_from_target target)
+  if(NOT APPLE OR NOT TARGET "${target}")
+    return()
+  endif()
+
+  foreach(property IN ITEMS INTERFACE_LINK_LIBRARIES INTERFACE_LINK_OPTIONS)
+    get_target_property(_values "${target}" "${property}")
+    if(_values)
+      list(FILTER _values EXCLUDE REGEX "(^|[ ;])-framework[ =]?AGL($|[ ;])|AGL\\.framework")
+      set_target_properties("${target}" PROPERTIES "${property}" "${_values}")
+    endif()
+  endforeach()
+endfunction()
+
 include(compilerconfig)
 include(defaults)
 include(helpers)
@@ -60,13 +74,13 @@ if(ENABLE_QT)
         FORCE
     )
   endif()
-  find_package(Qt6 COMPONENTS Widgets Core)
-  if(APPLE AND TARGET WrapOpenGL::WrapOpenGL)
-    get_target_property(_wrap_opengl_libs WrapOpenGL::WrapOpenGL INTERFACE_LINK_LIBRARIES)
-    if(_wrap_opengl_libs)
-      list(FILTER _wrap_opengl_libs EXCLUDE REGEX "AGL")
-      set_target_properties(WrapOpenGL::WrapOpenGL PROPERTIES INTERFACE_LINK_LIBRARIES "${_wrap_opengl_libs}")
-    endif()
+  find_package(Qt6 REQUIRED COMPONENTS Widgets Core)
+  if(APPLE)
+    remove_agl_framework_from_target(WrapOpenGL::WrapOpenGL)
+    remove_agl_framework_from_target(Qt6::Gui)
+    remove_agl_framework_from_target(Qt6::GuiPrivate)
+    remove_agl_framework_from_target(Qt6::Widgets)
+    remove_agl_framework_from_target(Qt6::WidgetsPrivate)
   endif()
   target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE Qt6::Core Qt6::Widgets)
   target_compile_options(
@@ -84,6 +98,13 @@ target_sources(
   PRIVATE
     src/plugin-main.c
     src/lottie-lower-third-source.c
+    src/lottie-lower-third-lottie.c
+    src/lottie-lower-third-markers.c
+    src/lottie-lower-third-playback.c
+    src/lottie-lower-third-properties.c
+    src/lottie-lower-third-render.c
+    src/lottie-lower-third-scene.c
+    src/lottie-passthrough-transition.c
     src/lottie-style-library.c
     src/lottie-style-manager.cpp
     deps/cJSON/cJSON.c
