@@ -127,7 +127,8 @@ void lottie_lower_third_render(void *data, gs_effect_t *effect)
 
 	if (!lottie_lower_third_is_loaded(ctx)) {
 		lottie_lower_third_request_preload(ctx);
-		lottie_lower_third_render_existing_texture(ctx, (uint32_t)ctx->buffer_width, (uint32_t)ctx->buffer_height);
+		lottie_lower_third_render_existing_texture(ctx, (uint32_t)ctx->buffer_width,
+							   (uint32_t)ctx->buffer_height);
 		return;
 	}
 
