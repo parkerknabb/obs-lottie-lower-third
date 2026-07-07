@@ -28,6 +28,7 @@ void lottie_lower_third_get_defaults(obs_data_t *settings)
 	obs_data_set_default_string(settings, "text2", "Subtext");
 	obs_data_set_default_bool(settings, SETTING_CUSTOM_FILE, false);
 	obs_data_set_default_string(settings, SETTING_STYLE_PATH, "");
+	obs_data_set_default_bool(settings, SETTING_AUTO_HIDE_ON_SCENE_TRANSITION, false);
 	obs_data_set_default_bool(settings, SETTING_PLACEMENT_INITIALIZED, false);
 }
 
@@ -187,6 +188,7 @@ obs_properties_t *lottie_lower_third_get_properties(void *data)
 
 	obs_properties_add_text(props, "text1", "Name", OBS_TEXT_DEFAULT);
 	obs_properties_add_text(props, "text2", "Title", OBS_TEXT_DEFAULT);
+	obs_properties_add_bool(props, SETTING_AUTO_HIDE_ON_SCENE_TRANSITION, "Auto-hide when leaving scene");
 
 	return props;
 }

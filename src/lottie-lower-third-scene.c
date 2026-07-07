@@ -27,6 +27,15 @@ struct find_item_in_scenes_data {
 	obs_sceneitem_t *result;
 };
 
+struct hide_items_data {
+	obs_source_t *target;
+};
+
+struct visible_item_data {
+	obs_source_t *target;
+	bool found;
+};
+
 static bool find_item_in_scenes_cb(void *data, obs_source_t *scene_source)
 {
 	struct find_item_in_scenes_data *fd = (struct find_item_in_scenes_data *)data;
@@ -42,6 +51,50 @@ static bool find_item_in_scenes_cb(void *data, obs_source_t *scene_source)
 		return false;
 	}
 	return true;
+}
+
+static bool hide_scene_item_cb(obs_scene_t *scene, obs_sceneitem_t *item, void *data)
+{
+	UNUSED_PARAMETER(scene);
+	struct hide_items_data *hd = (struct hide_items_data *)data;
+
+	if (obs_sceneitem_get_source(item) == hd->target && obs_sceneitem_visible(item))
+		obs_sceneitem_set_visible(item, false);
+
+	return true;
+}
+
+static bool hide_items_in_scene_cb(void *data, obs_source_t *scene_source)
+{
+	obs_scene_t *scene = obs_scene_from_source(scene_source);
+	if (!scene)
+		return true;
+
+	obs_scene_enum_items(scene, hide_scene_item_cb, data);
+	return true;
+}
+
+static bool visible_scene_item_cb(obs_scene_t *scene, obs_sceneitem_t *item, void *data)
+{
+	UNUSED_PARAMETER(scene);
+	struct visible_item_data *vd = (struct visible_item_data *)data;
+
+	if (obs_sceneitem_get_source(item) == vd->target && obs_sceneitem_visible(item)) {
+		vd->found = true;
+		return false;
+	}
+
+	return true;
+}
+
+static bool visible_item_in_scene_cb(void *data, obs_source_t *scene_source)
+{
+	obs_scene_t *scene = obs_scene_from_source(scene_source);
+	if (!scene)
+		return true;
+
+	obs_scene_enum_items(scene, visible_scene_item_cb, data);
+	return !((struct visible_item_data *)data)->found;
 }
 
 void lottie_lower_third_detach_hide_transition_owner(struct lottie_lower_third *ctx)
@@ -114,6 +167,31 @@ void lottie_lower_third_try_attach_hide_transition(struct lottie_lower_third *ct
 	}
 }
 
+void lottie_lower_third_hide_scene_items(struct lottie_lower_third *ctx)
+{
+	if (!ctx || !ctx->source)
+		return;
+
+	struct hide_items_data data = {
+		.target = ctx->source,
+	};
+	obs_enum_scenes(hide_items_in_scene_cb, &data);
+}
+
+bool lottie_lower_third_has_visible_scene_item(struct lottie_lower_third *ctx)
+{
+	if (!ctx || !ctx->source)
+		return false;
+
+	struct visible_item_data data = {
+		.target = ctx->source,
+		.found = false,
+	};
+	obs_enum_scenes(visible_item_in_scene_cb, &data);
+
+	return data.found;
+}
+
 static void scene_item_visible(void *data, calldata_t *params)
 {
 	struct lottie_lower_third *ctx = (struct lottie_lower_third *)data;
@@ -127,11 +205,15 @@ static void scene_item_visible(void *data, calldata_t *params)
 		obs_sceneitem_set_transition_duration(item, false, get_exit_duration_ms(ctx));
 	}
 
+	ctx->handling_scene_item_visibility = true;
+
 	if (visible) {
 		lottie_lower_third_show(ctx);
 	} else {
 		lottie_lower_third_hide(ctx);
 	}
+
+	ctx->handling_scene_item_visibility = false;
 }
 
 static void place_sceneitem_bottom_left(struct lottie_lower_third *ctx, obs_sceneitem_t *item)

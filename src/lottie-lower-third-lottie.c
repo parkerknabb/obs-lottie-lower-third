@@ -4,9 +4,15 @@
 
 #include <cJSON.h>
 #include <plugin-support.h>
+#include <util/platform.h>
+#include <util/task.h>
 
 #include <stdio.h>
 #include <string.h>
+
+static os_task_queue_t *preload_queue;
+
+static bool lottie_lower_third_load_locked(struct lottie_lower_third *ctx);
 
 static char *read_file_to_string(const char *path, size_t *size_out)
 {
@@ -215,6 +221,163 @@ static void patch_lottie_text_layers(cJSON *node, struct lottie_lower_third *ctx
 	}
 }
 
+static bool lottie_lower_third_ensure_runtime(struct lottie_lower_third *ctx)
+{
+	if (!ctx)
+		return false;
+
+	if (!ctx->buffer) {
+		size_t buffer_bytes = (size_t)ctx->buffer_width * (size_t)ctx->buffer_height * sizeof(uint32_t);
+		ctx->buffer = bzalloc(buffer_bytes);
+		if (!ctx->buffer) {
+			blog(LOG_ERROR, "[lottie_lower_third] failed to allocate render buffer");
+			return false;
+		}
+	}
+
+	if (!ctx->canvas) {
+		ctx->canvas = tvg_swcanvas_create(TVG_ENGINE_OPTION_DEFAULT);
+		if (!ctx->canvas) {
+			blog(LOG_ERROR, "[lottie_lower_third] failed to create ThorVG canvas");
+			return false;
+		}
+	}
+
+	tvg_swcanvas_set_target(ctx->canvas, ctx->buffer, ctx->buffer_width, ctx->buffer_width, ctx->buffer_height,
+				TVG_COLORSPACE_ARGB8888);
+
+	if (!ctx->anim) {
+		ctx->anim = tvg_lottie_animation_new();
+		if (!ctx->anim) {
+			blog(LOG_ERROR, "[lottie_lower_third] failed to create ThorVG animation");
+			return false;
+		}
+	}
+
+	if (!ctx->pic) {
+		ctx->pic = tvg_animation_get_picture(ctx->anim);
+		if (!ctx->pic) {
+			blog(LOG_ERROR, "[lottie_lower_third] failed to get ThorVG animation picture");
+			tvg_animation_del(ctx->anim);
+			ctx->anim = NULL;
+			return false;
+		}
+	}
+
+	return true;
+}
+
+static void preload_task(void *param)
+{
+	obs_source_t *source = (obs_source_t *)param;
+	struct lottie_lower_third *ctx = obs_obj_get_data(source);
+
+	if (!ctx || !ctx->load_mutex_initialized) {
+		obs_source_release(source);
+		return;
+	}
+
+	pthread_mutex_lock(&ctx->load_mutex);
+
+	if (!ctx->lottie_path || !*ctx->lottie_path || (ctx->lottie_loaded && !ctx->reload_requested)) {
+		ctx->preload_queued = false;
+		ctx->preload_in_progress = false;
+		pthread_mutex_unlock(&ctx->load_mutex);
+		obs_source_release(source);
+		return;
+	}
+
+	ctx->preload_queued = false;
+	ctx->reload_requested = false;
+	ctx->preload_in_progress = true;
+	ctx->preload_failed = false;
+
+	bool loaded = lottie_lower_third_load_locked(ctx);
+
+	ctx->preload_in_progress = false;
+	ctx->preload_failed = !loaded;
+	pthread_mutex_unlock(&ctx->load_mutex);
+
+	obs_source_release(source);
+}
+
+void lottie_lower_third_preload_system_init(void)
+{
+	if (!preload_queue)
+		preload_queue = os_task_queue_create();
+}
+
+void lottie_lower_third_preload_system_destroy(void)
+{
+	if (preload_queue) {
+		os_task_queue_destroy(preload_queue);
+		preload_queue = NULL;
+	}
+}
+
+void lottie_lower_third_request_preload(struct lottie_lower_third *ctx)
+{
+	if (!ctx || !ctx->load_mutex_initialized || !preload_queue || !ctx->source)
+		return;
+
+	pthread_mutex_lock(&ctx->load_mutex);
+
+	bool should_queue = (!ctx->lottie_loaded || ctx->reload_requested) && !ctx->preload_queued &&
+			    !ctx->preload_in_progress && !ctx->preload_failed && !ctx->reload_pending &&
+			    ctx->lottie_path && *ctx->lottie_path;
+	if (should_queue)
+		ctx->preload_queued = true;
+
+	pthread_mutex_unlock(&ctx->load_mutex);
+
+	if (!should_queue)
+		return;
+
+	obs_source_t *source = obs_source_get_ref(ctx->source);
+	if (!source || !os_task_queue_queue_task(preload_queue, preload_task, source)) {
+		if (source)
+			obs_source_release(source);
+
+		pthread_mutex_lock(&ctx->load_mutex);
+		ctx->preload_queued = false;
+		pthread_mutex_unlock(&ctx->load_mutex);
+	}
+}
+
+bool lottie_lower_third_is_loaded(struct lottie_lower_third *ctx)
+{
+	if (!ctx || !ctx->load_mutex_initialized)
+		return false;
+
+	if (pthread_mutex_trylock(&ctx->load_mutex) != 0)
+		return false;
+
+	bool loaded = ctx->lottie_loaded;
+	pthread_mutex_unlock(&ctx->load_mutex);
+
+	return loaded;
+}
+
+void lottie_lower_third_request_pending_preload(struct lottie_lower_third *ctx, bool force)
+{
+	if (!ctx || !ctx->load_mutex_initialized)
+		return;
+
+	if (pthread_mutex_trylock(&ctx->load_mutex) != 0)
+		return;
+
+	bool should_request = ctx->reload_pending && (force || os_gettime_ns() >= ctx->reload_after_ns);
+	if (should_request) {
+		ctx->reload_pending = false;
+		ctx->reload_requested = true;
+	}
+
+	pthread_mutex_unlock(&ctx->load_mutex);
+
+	if (should_request)
+		lottie_lower_third_request_preload(ctx);
+}
+
 void lottie_lower_third_unload_lottie(struct lottie_lower_third *ctx)
 {
 	if (!ctx)
@@ -229,20 +392,6 @@ void lottie_lower_third_unload_lottie(struct lottie_lower_third *ctx)
 		tvg_animation_del(ctx->anim);
 		ctx->anim = NULL;
 		ctx->pic = NULL;
-	}
-
-	ctx->anim = tvg_lottie_animation_new();
-	if (!ctx->anim) {
-		blog(LOG_ERROR, "[lottie_lower_third] failed to create ThorVG animation");
-		return;
-	}
-
-	ctx->pic = tvg_animation_get_picture(ctx->anim);
-	if (!ctx->pic) {
-		blog(LOG_ERROR, "[lottie_lower_third] failed to get ThorVG animation picture");
-		tvg_animation_del(ctx->anim);
-		ctx->anim = NULL;
-		return;
 	}
 
 	ctx->total_frames = 0.0f;
@@ -260,7 +409,7 @@ void lottie_lower_third_unload_lottie(struct lottie_lower_third *ctx)
 	ctx->warned_canvas_sync_failure = false;
 }
 
-bool lottie_lower_third_load_with_current_text(struct lottie_lower_third *ctx)
+static bool lottie_lower_third_load_locked(struct lottie_lower_third *ctx)
 {
 	if (!ctx || !ctx->lottie_path || !*ctx->lottie_path)
 		return false;
@@ -315,7 +464,7 @@ bool lottie_lower_third_load_with_current_text(struct lottie_lower_third *ctx)
 	bool parsed_json_markers = lottie_lower_third_parse_markers_from_json(root, ctx);
 	cJSON_Delete(root);
 
-	if (!ctx->anim || !ctx->pic) {
+	if (!lottie_lower_third_ensure_runtime(ctx)) {
 		cJSON_free(patched_json);
 		return false;
 	}
@@ -370,4 +519,21 @@ bool lottie_lower_third_load_with_current_text(struct lottie_lower_third *ctx)
 	ctx->current_lottie_frame = ctx->intro_start_frame;
 
 	return true;
+}
+
+bool lottie_lower_third_load_with_current_text(struct lottie_lower_third *ctx)
+{
+	if (!ctx || !ctx->load_mutex_initialized)
+		return false;
+
+	if (pthread_mutex_trylock(&ctx->load_mutex) != 0)
+		return false;
+
+	bool loaded = ctx->lottie_loaded;
+	if (!loaded && !ctx->preload_in_progress)
+		loaded = lottie_lower_third_load_locked(ctx);
+
+	bool result = loaded || ctx->lottie_loaded;
+	pthread_mutex_unlock(&ctx->load_mutex);
+	return result;
 }

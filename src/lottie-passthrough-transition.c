@@ -1,5 +1,6 @@
 #include "lottie-passthrough-transition.h"
 #include "lottie-lower-third-exit.h"
+#include "lottie-lower-third-internal.h"
 
 #include <plugin-support.h>
 
@@ -48,6 +49,9 @@ static void passthrough_callback(void *data, gs_texture_t *a, gs_texture_t *b, f
 	struct passthrough_transition *ctx = (struct passthrough_transition *)data;
 
 	if (!a)
+		return;
+
+	if (ctx->owner && ctx->owner->suppress_hide_transition_render)
 		return;
 
 	if (ctx->owner) {

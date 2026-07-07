@@ -11,8 +11,16 @@ void lottie_lower_third_show(void *data)
 {
 	struct lottie_lower_third *ctx = (struct lottie_lower_third *)data;
 
+	if (ctx->auto_hide_on_scene_transition && !lottie_lower_third_has_visible_scene_item(ctx)) {
+		ctx->state = STATE_HIDDEN;
+		ctx->suppress_hidden_preview = true;
+		ctx->suppress_hide_transition_render = true;
+		return;
+	}
+
 	ctx->state = STATE_ENTERING;
 	ctx->suppress_hidden_preview = false;
+	ctx->suppress_hide_transition_render = false;
 	ctx->current_frame = 0;
 	ctx->is_looping_hold = false;
 
@@ -20,11 +28,11 @@ void lottie_lower_third_show(void *data)
 		return;
 	}
 
-	if (!ctx->lottie_loaded) {
-		if (!lottie_lower_third_load_with_current_text(ctx)) {
-			blog(LOG_ERROR, "[lottie_lower_third] Failed to load patched Lottie");
-			return;
-		}
+	lottie_lower_third_request_pending_preload(ctx, true);
+
+	if (!lottie_lower_third_is_loaded(ctx)) {
+		lottie_lower_third_request_preload(ctx);
+		return;
 	}
 
 	ctx->current_lottie_frame = ctx->intro_start_frame;
@@ -35,6 +43,18 @@ void lottie_lower_third_hide(void *data)
 {
 	struct lottie_lower_third *ctx = (struct lottie_lower_third *)data;
 	ctx->suppress_hidden_preview = true;
+	if (ctx->auto_hide_on_scene_transition && !ctx->handling_scene_item_visibility)
+		ctx->suppress_hide_transition_render = true;
+	else if (!ctx->auto_hide_in_progress)
+		ctx->suppress_hide_transition_render = false;
+	if (!lottie_lower_third_is_loaded(ctx))
+		ctx->state = STATE_HIDDEN;
+
+	if (ctx->auto_hide_on_scene_transition && !ctx->auto_hide_in_progress) {
+		ctx->auto_hide_in_progress = true;
+		lottie_lower_third_hide_scene_items(ctx);
+		ctx->auto_hide_in_progress = false;
+	}
 }
 
 void lottie_lower_third_begin_exit(struct lottie_lower_third *ctx)
@@ -52,7 +72,9 @@ void lottie_lower_third_video_tick(void *data, float seconds)
 	UNUSED_PARAMETER(seconds);
 	struct lottie_lower_third *ctx = (struct lottie_lower_third *)data;
 
-	if (!ctx->lottie_loaded)
+	lottie_lower_third_request_pending_preload(ctx, false);
+
+	if (!lottie_lower_third_is_loaded(ctx))
 		return;
 
 	float frame_advance = ctx->lottie_fps * seconds;
@@ -101,10 +123,15 @@ void lottie_lower_third_render(void *data, gs_effect_t *effect)
 	if (!ctx)
 		return;
 
-	if (!ctx->lottie_loaded)
-		return;
+	lottie_lower_third_request_pending_preload(ctx, false);
 
-	if (ctx->state == STATE_HIDDEN && ctx->suppress_hidden_preview)
+	if (!lottie_lower_third_is_loaded(ctx)) {
+		lottie_lower_third_request_preload(ctx);
+		lottie_lower_third_render_existing_texture(ctx, (uint32_t)ctx->buffer_width, (uint32_t)ctx->buffer_height);
+		return;
+	}
+
+	if (ctx->state == STATE_HIDDEN && ctx->suppress_hidden_preview && !obs_source_showing(ctx->source))
 		return;
 
 	float frame = ctx->current_lottie_frame;

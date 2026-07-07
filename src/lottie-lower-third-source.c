@@ -9,8 +9,11 @@
 #include "lottie-passthrough-transition.h"
 
 #include <plugin-support.h>
+#include <util/platform.h>
 
 #include <string.h>
+
+#define TEXT_RELOAD_DEBOUNCE_NS 350000000ULL
 
 static bool set_bstr(char **dst, const char *src)
 {
@@ -35,6 +38,9 @@ static const char *lottie_lower_third_get_name(void *type_data)
 static void *lottie_lower_third_create(obs_data_t *settings, obs_source_t *source)
 {
 	struct lottie_lower_third *ctx = bzalloc(sizeof(struct lottie_lower_third));
+	pthread_mutex_init(&ctx->load_mutex, NULL);
+	ctx->load_mutex_initialized = true;
+
 	ctx->source = source;
 	ctx->state = STATE_HIDDEN;
 	ctx->suppress_hidden_preview = false;
@@ -42,33 +48,6 @@ static void *lottie_lower_third_create(obs_data_t *settings, obs_source_t *sourc
 
 	ctx->buffer_width = 1920;
 	ctx->buffer_height = 1080;
-	ctx->buffer = bzalloc(ctx->buffer_width * ctx->buffer_height * sizeof(uint32_t));
-	ctx->canvas = tvg_swcanvas_create(TVG_ENGINE_OPTION_DEFAULT);
-	tvg_swcanvas_set_target(ctx->canvas, ctx->buffer, ctx->buffer_width, ctx->buffer_width, ctx->buffer_height,
-				TVG_COLORSPACE_ARGB8888);
-	if (!ctx->canvas) {
-		blog(LOG_ERROR, "[lottie_lower_third] failed to create ThorVG canvas");
-		bfree(ctx->buffer);
-		bfree(ctx);
-		return NULL;
-	}
-	ctx->anim = tvg_lottie_animation_new();
-	if (!ctx->anim) {
-		blog(LOG_ERROR, "[lottie_lower_third] failed to create ThorVG animation");
-		tvg_canvas_destroy(ctx->canvas);
-		bfree(ctx->buffer);
-		bfree(ctx);
-		return NULL;
-	}
-	ctx->pic = tvg_animation_get_picture(ctx->anim);
-	if (!ctx->pic) {
-		blog(LOG_ERROR, "[lottie_lower_third] failed to get ThorVG animation picture");
-		tvg_animation_del(ctx->anim);
-		tvg_canvas_destroy(ctx->canvas);
-		bfree(ctx->buffer);
-		bfree(ctx);
-		return NULL;
-	}
 	ctx->lottie_loaded = false;
 	ctx->lottie_fps = 30.0f;
 	ctx->lottie_width = 1920.0f;
@@ -85,6 +64,7 @@ static void *lottie_lower_third_create(obs_data_t *settings, obs_source_t *sourc
 	ctx->lottie_fps = 30.0f;
 
 	ctx->custom_file = obs_data_get_bool(settings, SETTING_CUSTOM_FILE);
+	ctx->auto_hide_on_scene_transition = obs_data_get_bool(settings, SETTING_AUTO_HIDE_ON_SCENE_TRANSITION);
 	const char *style_path = obs_data_get_string(settings, SETTING_STYLE_PATH);
 	const char *lottie_path = lottie_lower_third_get_effective_lottie_path_from_settings(settings);
 
@@ -105,12 +85,7 @@ static void *lottie_lower_third_create(obs_data_t *settings, obs_source_t *sourc
 
 	lottie_lower_third_connect_scene_signals(ctx);
 	lottie_lower_third_connect_global_source_create(ctx);
-	if (ctx->lottie_path && *ctx->lottie_path) {
-		if (!lottie_lower_third_load_with_current_text(ctx)) {
-			blog(LOG_WARNING,
-			     "[lottie_lower_third] create: Lottie was configured but could not be loaded for preview");
-		}
-	}
+	lottie_lower_third_request_preload(ctx);
 	return ctx;
 }
 
@@ -125,10 +100,13 @@ static void lottie_lower_third_update(void *data, obs_data_t *settings)
 	const char *style_path = obs_data_get_string(settings, SETTING_STYLE_PATH);
 	const char *custom_path = obs_data_get_string(settings, SETTING_LOTTIE_PATH);
 	bool custom_file = obs_data_get_bool(settings, SETTING_CUSTOM_FILE);
+	ctx->auto_hide_on_scene_transition = obs_data_get_bool(settings, SETTING_AUTO_HIDE_ON_SCENE_TRANSITION);
 
 	const char *lottie_path = custom_file ? custom_path : style_path;
 	const char *text1 = obs_data_get_string(settings, "text1");
 	const char *text2 = obs_data_get_string(settings, "text2");
+
+	pthread_mutex_lock(&ctx->load_mutex);
 
 	if (ctx->custom_file != custom_file) {
 		ctx->custom_file = custom_file;
@@ -151,19 +129,14 @@ static void lottie_lower_third_update(void *data, obs_data_t *settings)
 		changed = true;
 	}
 
-	if ((changed || !ctx->lottie_loaded) && ctx->lottie_path) {
-		float old_frame = ctx->current_lottie_frame;
-		enum lottie_lower_third_state old_state = ctx->state;
-
-		if (lottie_lower_third_load_with_current_text(ctx)) {
-			ctx->state = old_state;
-
-			if (old_frame >= 0.0f && old_frame < ctx->total_frames)
-				ctx->current_lottie_frame = old_frame;
-			else if (ctx->state == STATE_HIDDEN)
-				ctx->current_lottie_frame = lottie_lower_third_get_preview_frame(ctx);
-		}
+	if (changed) {
+		ctx->preload_queued = false;
+		ctx->preload_failed = false;
+		ctx->reload_pending = true;
+		ctx->reload_after_ns = os_gettime_ns() + TEXT_RELOAD_DEBOUNCE_NS;
 	}
+
+	pthread_mutex_unlock(&ctx->load_mutex);
 }
 
 static void lottie_lower_third_destroy(void *data)
@@ -192,6 +165,8 @@ static void lottie_lower_third_destroy(void *data)
 		bfree(ctx->text1_value);
 	if (ctx->text2_value)
 		bfree(ctx->text2_value);
+	if (ctx->load_mutex_initialized)
+		pthread_mutex_destroy(&ctx->load_mutex);
 
 	bfree(data);
 }
@@ -228,8 +203,12 @@ static struct obs_source_info lottie_lower_third_info = {
 
 void register_lottie_lower_third_source(void)
 {
+	lottie_lower_third_preload_system_init();
 	obs_register_source(&lottie_lower_third_info);
 	lottie_passthrough_transition_register();
 }
 
-void unregister_lottie_lower_third_source(void) {}
+void unregister_lottie_lower_third_source(void)
+{
+	lottie_lower_third_preload_system_destroy();
+}

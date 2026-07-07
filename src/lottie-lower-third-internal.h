@@ -2,6 +2,7 @@
 
 #include <obs-module.h>
 #include <thorvg_capi.h>
+#include <util/threading.h>
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -9,6 +10,7 @@
 #define SETTING_STYLE_PATH "lottie_style"
 #define SETTING_CUSTOM_FILE "custom_file"
 #define SETTING_LOTTIE_PATH "lottie_path"
+#define SETTING_AUTO_HIDE_ON_SCENE_TRANSITION "auto_hide_on_scene_transition"
 #define SETTING_PLACEMENT_INITIALIZED "__lottie_lower_third_placement_initialized"
 
 enum lottie_lower_third_state {
@@ -34,6 +36,18 @@ struct lottie_lower_third {
 	char *lottie_path;
 	char *style_path;
 	bool custom_file;
+	bool auto_hide_on_scene_transition;
+	bool auto_hide_in_progress;
+	bool handling_scene_item_visibility;
+	bool suppress_hide_transition_render;
+	pthread_mutex_t load_mutex;
+	bool load_mutex_initialized;
+	bool preload_queued;
+	bool preload_in_progress;
+	bool preload_failed;
+	bool reload_pending;
+	bool reload_requested;
+	uint64_t reload_after_ns;
 	Tvg_Canvas canvas;
 	Tvg_Animation anim;
 	Tvg_Paint pic;

@@ -79,6 +79,29 @@ bool lottie_lower_third_render_buffer_to_obs(struct lottie_lower_third *ctx, uin
 	return true;
 }
 
+bool lottie_lower_third_render_existing_texture(struct lottie_lower_third *ctx, uint32_t draw_width,
+						uint32_t draw_height)
+{
+	if (!ctx || !ctx->texture)
+		return false;
+
+	gs_effect_t *default_effect = obs_get_base_effect(OBS_EFFECT_DEFAULT);
+	if (!default_effect)
+		return false;
+
+	gs_eparam_t *image = gs_effect_get_param_by_name(default_effect, "image");
+
+	if (!image)
+		return false;
+
+	gs_effect_set_texture(image, ctx->texture);
+
+	while (gs_effect_loop(default_effect, "Draw"))
+		gs_draw_sprite(ctx->texture, 0, draw_width, draw_height);
+
+	return true;
+}
+
 bool lottie_lower_third_render_frame_to_buffer(struct lottie_lower_third *ctx, float frame)
 {
 	if (!ctx || !ctx->lottie_loaded || !ctx->anim || !ctx->canvas || !ctx->buffer)
